@@ -37,7 +37,7 @@ chmod +x docker-up.sh
 
 也可以直接运行 `docker compose up -d --build`。启动后访问 `http://localhost:5173`，API 文档为 `http://localhost:5173/docs`。SQLite 数据保存在项目下的 `data/semi_crawler.db`，停止服务使用 `docker compose down`，查看日志使用 `docker compose logs -f`。如需更换端口，可执行 `SEMICRAWLER_PORT=8080 ./docker-up.sh`。
 
-Docker 构建默认通过阿里云 PyPI 镜像安装 `uv` 和 Python 依赖，以便在中国大陆网络环境中使用。需要切换其他镜像或官方源时，可设置 `PYPI_INDEX_URL`：
+Docker 构建默认通过腾讯云 PyPI 镜像安装 `uv` 和 Python 依赖，以便在中国大陆网络环境中使用。需要切换其他镜像或官方源时，可设置 `PYPI_INDEX_URL`：
 
 ```bash
 PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple docker compose build backend

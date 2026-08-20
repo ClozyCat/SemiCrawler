@@ -4,7 +4,7 @@ services:
       context: .
       dockerfile: Dockerfile.backend
       args:
-        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.aliyun.com/pypi/simple}
+        PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://mirrors.cloud.tencent.com/pypi/simple}
     environment:
       SEMICRAWLER_DATA_DIR: /app/data
       SEMICRAWLER_DATABASE_URL: ${SEMICRAWLER_DATABASE_URL:-}
