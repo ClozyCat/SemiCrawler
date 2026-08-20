@@ -1,0 +1,29 @@
+services:
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    environment:
+      SEMICRAWLER_DATA_DIR: /app/data
+      SEMICRAWLER_DATABASE_URL: ${SEMICRAWLER_DATABASE_URL:-}
+    volumes:
+      - ./data:/app/data
+    expose:
+      - "8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${SEMICRAWLER_PORT:-5173}:80"
+    restart: unless-stopped

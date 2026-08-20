@@ -1,0 +1,22 @@
+[project]
+name = "semi-crawler"
+version = "0.1.0"
+description = "Semiconductor news collection and structured export workspace"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+  "beautifulsoup4>=4.13,<5",
+  "fastapi>=0.116,<1",
+  "httpx>=0.28,<1",
+  "jieba>=0.42,<1",
+  "openpyxl>=3.1,<4",
+  "sqlalchemy>=2.0,<3",
+  "uvicorn[standard]>=0.35,<1",
+]
+
+[dependency-groups]
+dev = ["pytest>=8.4,<9"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

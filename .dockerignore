@@ -1,0 +1,12 @@
+.git
+.venv
+node_modules
+__pycache__
+*.pyc
+.pytest_cache
+.playwright-cli
+output
+dist
+data/*.db-shm
+data/*.db-wal
+.npm-cache
