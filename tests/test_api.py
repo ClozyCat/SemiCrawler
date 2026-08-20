@@ -46,6 +46,8 @@ def test_task_snapshot_and_logs(client, monkeypatch):
     task = client.get(f"/api/tasks/{task['id']}").json()
     assert task["status"] == "completed"
     assert task["progress"] == 100
+    assert task["created_at"].endswith("+08:00")
+    assert task["completed_at"].endswith("+08:00")
     assert len(task["source_snapshot"]) == 2
 
     assert task["keyword_filter_enabled"] is False
@@ -54,6 +56,7 @@ def test_task_snapshot_and_logs(client, monkeypatch):
     logs = client.get(f"/api/tasks/{task['id']}/logs").json()
     assert len(logs) == 4
     assert "Mock" in logs[-1]["message"]
+    assert all(log["created_at"].endswith("+08:00") for log in logs)
 
 
 def test_task_snapshots_keyword_and_structure_options(client, monkeypatch):

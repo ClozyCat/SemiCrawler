@@ -4,8 +4,8 @@ import hashlib
 import json
 import re
 import time
-from functools import lru_cache
 from datetime import date, datetime
+from functools import lru_cache
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse
 from urllib.robotparser import RobotFileParser
@@ -159,7 +159,11 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
             try:
                 links, next_url = discover_listing(fetch_html(entry, config.request.timeout_seconds), entry, config)
             except Exception as exc:
-                failed += 1; db.add(TaskLog(task_id=task.id, level="error", message=f"入口抓取失败 {entry}: {exc}")); break
+                failed += 1
+                task.failed_count += 1
+                db.add(TaskLog(task_id=task.id, level="error", message=f"入口抓取失败 {entry}: {exc}"))
+                db.commit()
+                break
             page_dates: list[date] = []
             for url in links:
                 if url in seen_urls:
@@ -181,13 +185,20 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
                     digest = hashlib.sha256(" ".join(article["body"].split()).encode()).hexdigest()
                     existing = db.scalar(select(RawArticle).where((RawArticle.canonical_url == article["canonical_url"]) | (RawArticle.content_hash == digest)))
                     if existing:
-                        deduped += 1; continue
+                        deduped += 1
+                        task.deduplicated_count += 1
+                        continue
                     db.add(RawArticle(source_id=snapshot["id"], task_id=task.id, content_hash=digest, status="pending", **article))
                     saved += 1
+                    task.fetched_count += 1
                 except Exception as exc:
-                    failed += 1; db.add(TaskLog(task_id=task.id, level="error", message=f"抓取失败 {url}: {exc}"))
-                time.sleep(delay)
-            db.commit()
+                    failed += 1
+                    task.failed_count += 1
+                    db.add(TaskLog(task_id=task.id, level="error", message=f"抓取失败 {url}: {exc}"))
+                finally:
+                    # Expose per-article counters to the polling API while the task is running.
+                    db.commit()
+                    time.sleep(delay)
             if page_dates and max(page_dates) < task.start_date:
                 break
             entry = next_url
@@ -201,9 +212,11 @@ def run_task(db: Session, task: CollectionTask) -> None:
         try:
             values = collect_source(db, task, snapshot)
         except Exception as exc:
-            values = (0, 0, 1, 0, 0, 0); db.add(TaskLog(task_id=task.id, level="error", message=f"来源配置失败 {snapshot['name']}: {exc}"))
+            values = (0, 0, 1, 0, 0, 0)
+            task.failed_count += 1
+            db.add(TaskLog(task_id=task.id, level="error", message=f"来源配置失败 {snapshot['name']}: {exc}"))
         totals = [a + b for a, b in zip(totals, values)]; db.commit()
-    structured, llm_failed = structure_pending(db, task.id) if task.auto_structure_enabled else (0, 0)
+    structured, llm_failed = structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
     task.fetched_count, task.deduplicated_count, task.structured_count = totals[0], totals[1], structured
     task.failed_count = totals[2] + llm_failed
     task.status = "completed" if task.failed_count == 0 else "completed_with_errors"

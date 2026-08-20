@@ -1,11 +1,28 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    HttpUrl,
+    field_serializer,
+    field_validator,
+)
 
 from .constants import DEFAULT_START_DATE, INFO_TYPES
+
+SHANGHAI_TIMEZONE = timezone(timedelta(hours=8), "Asia/Shanghai")
+
+
+def _as_shanghai_time(value: datetime | None) -> datetime | None:
+    if value is None:
+        return None
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=UTC)
+    return value.astimezone(SHANGHAI_TIMEZONE)
 
 
 class SourceCreate(BaseModel):
@@ -79,6 +96,10 @@ class TaskRead(BaseModel):
     auto_structure_enabled: bool = False
     keyword_config: list[dict[str, Any]] = Field(default_factory=list)
 
+    @field_serializer("created_at", "started_at", "completed_at")
+    def serialize_task_time(self, value: datetime | None) -> datetime | None:
+        return _as_shanghai_time(value)
+
 
 class LogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -87,6 +108,10 @@ class LogRead(BaseModel):
     level: str
     message: str
     created_at: datetime
+
+    @field_serializer("created_at")
+    def serialize_log_time(self, value: datetime) -> datetime:
+        return _as_shanghai_time(value)
 
 
 class RecordRead(BaseModel):

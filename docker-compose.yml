@@ -25,5 +25,5 @@ services:
       backend:
         condition: service_healthy
     ports:
-      - "${SEMICRAWLER_PORT:-5173}:80"
+      - "0.0.0.0:8071:80"
     restart: unless-stopped

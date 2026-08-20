@@ -57,6 +57,9 @@ def test_collection_counts_only_persisted_articles_as_fetched(monkeypatch):
         result = collect_source(db, task, {"id": source.id, "name": source.name,
             "base_url": source.base_url, "config": raw_config})
         assert result == (1, 0, 0, 2, 1, 0)
+        assert task.fetched_count == 1
+        assert task.deduplicated_count == 0
+        assert task.failed_count == 0
         assert db.scalar(select(func.count(RawArticle.id)).where(RawArticle.task_id == task.id)) == 1
 
 

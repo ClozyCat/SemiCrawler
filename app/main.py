@@ -154,7 +154,7 @@ def create_task(payload: TaskCreate, background_tasks: BackgroundTasks, db: Sess
     db.add(task)
     db.flush()
     db.add_all([
-        TaskLog(task_id=task.id, message=f"已创建任务，起始日期 {payload.start_date.isoformat()}"),
+        TaskLog(task_id=task.id, message=f"已创建任务，资讯起始日期 {payload.start_date.isoformat()}"),
         TaskLog(task_id=task.id, message=f"已保存 {len(sources)} 个来源的配置快照"),
         TaskLog(task_id=task.id, level="notice", message="已排队执行真实 HTTP 采集"),
     ])

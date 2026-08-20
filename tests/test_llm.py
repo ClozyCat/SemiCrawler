@@ -49,6 +49,44 @@ def test_short_place_name_is_preserved_without_alias_expansion():
     )
     assert region == "中国大陆-华北"
     assert organization == "亦庄"
+
+
+def test_development_zone_takes_priority_over_school_in_same_article():
+    region, organization = _normalize_region_and_organization(
+        "中国大陆-西南",
+        "四川大学",
+        "项目依托四川大学的技术成果，正式落户成都成华经开区。",
+    )
+    assert region == "中国大陆-西南"
+    assert organization == "成都成华经开区"
+
+
+def test_sentence_like_organization_is_replaced_with_noun_phrase_from_context():
+    region, organization = _normalize_region_and_organization(
+        "北京", "项目位于北京经济技术开发区", "项目位于北京经济技术开发区。"
+    )
+    assert region == "中国大陆-华北"
+    assert organization == "北京经济技术开发区"
+
+
+def test_ecocity_takes_priority_over_sentence_like_school_source():
+    context = (
+        "近日，中新天津生态城重点产业项目建设全面提速。"
+        "天津芯擎科技技术主要来源于清华大学天津电子信息研究院孵化企业。"
+    )
+    region, organization = _normalize_region_and_organization(
+        "中国大陆-华北", "天津芯擎科技技术主要来源于清华大学", context
+    )
+    assert region == "中国大陆-华北"
+    assert organization == "中新天津生态城"
+
+
+def test_luowei_extracts_official_zone_name_and_alias():
+    region, organization = _normalize_region_and_organization(
+        "北京", "", "项目落位北京经济技术开发区（亦庄），计划年内开工。"
+    )
+    assert region == "中国大陆-华北"
+    assert organization == "北京经济技术开发区（亦庄）"
 from app.models import ModelSetting, RawArticle, Source
 
 
@@ -71,6 +109,53 @@ def test_llm_retries_invalid_output_and_marks_low_confidence(monkeypatch):
         assert record.info_type == "项目签约"
         assert record.status == "review_required"
         assert record.amount_currency == "CNY"
+
+
+def test_llm_keeps_only_one_record_per_info_type(monkeypatch):
+    records = [
+        {
+            "info_type": "项目签约",
+            "project_name": "第一个项目",
+            "details": "第一条签约信息。",
+        },
+        {
+            "info_type": "项目签约",
+            "project_name": "第二个项目",
+            "details": "第二条签约信息。",
+        },
+    ]
+    monkeypatch.setattr(
+        "app.llm._call",
+        lambda setting, messages: json.dumps({"records": records}, ensure_ascii=False),
+    )
+    with SessionLocal() as db:
+        source = Source(name="去重测试", base_url="https://dedupe.example.com", enabled=True, builtin=False, config_json="{}")
+        db.add(source)
+        db.flush()
+        article = RawArticle(
+            source_id=source.id,
+            canonical_url="https://dedupe.example.com/a",
+            title="多项目签约",
+            body="资料包含两条项目签约信息。" * 5,
+            content_hash="d" * 64,
+            status="pending",
+        )
+        db.add(article)
+        db.commit()
+        db.refresh(article)
+
+        count = structure_article(
+            db,
+            article,
+            ModelSetting(base_url="https://api.example.com", model_name="mock", api_key="x", enabled=True),
+        )
+        db.commit()
+
+        stored = db.query(__import__("app.models", fromlist=["StructuredRecord"]).StructuredRecord).all()
+        assert count == 1
+        assert len(stored) == 1
+        assert stored[0].info_type == "项目签约"
+        assert stored[0].project_name == "第一个项目"
 
 
 def test_llm_empty_output_has_readable_error_after_retry(monkeypatch):

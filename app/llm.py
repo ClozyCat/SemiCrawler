@@ -11,7 +11,14 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .constants import INFO_TYPES, REGION_OPTIONS
-from .models import ModelSetting, RawArticle, Source, StructuredRecord, TaskLog
+from .models import (
+    CollectionTask,
+    ModelSetting,
+    RawArticle,
+    Source,
+    StructuredRecord,
+    TaskLog,
+)
 
 
 class Amount(BaseModel):
@@ -57,9 +64,9 @@ class ModelOutputError(ValueError):
     pass
 
 
-SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不推测。每个独立项目一条记录，无结构化价值则 records 为空。
+SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不推测。单篇资料中每种资讯类型最多输出一条记录；同类型信息需整合到同一条记录中，不得因为包含多个项目或主体而拆分为多条。无结构化价值则 records 为空。
 资讯类型只能从给定枚举选择。地域只能从以下枚举中选择，并且必须使用完整名称：{regions}。
-“开发区/院校”只能填写项目或企业明确归属的具体地方、园区、学校或科研机构，例如省、市、区县、开发区、经开区、高新区、产业园、大学、学院、研究院、实验室。企业、集团及其简称不是开发区/院校，必须填写到“企业名称”，严禁将公司名填入“开发区/院校”。
+“开发区/院校”只能填写项目或企业明确归属的具体地方、园区、学校或科研机构，例如省、市、区县、开发区、经开区、高新区、产业园、生态城、大学、学院、研究院、实验室。如果同一篇资料同时出现开发区/园区（包括经开区、高新区、产业园、生态城等）和院校/科研机构，该字段只填开发区/园区，不填院校。字段值必须是名词或专有名词短语，不得填写句子、动作或描述性短语；例如“天津芯擎科技技术主要来源于清华大学”不是合法字段值。企业、集团及其简称不是开发区/院校，必须填写到“企业名称”，严禁将公司名填入“开发区/院校”。
 中国大陆的具体地址不能直接写入地域：地域填对应的“中国大陆-大区”，具体地点填入“开发区/院校”。原文有明确的落户、位于、入驻、选址等归属关系时必须提取对应地点；例如“成都成华经开区”应填入开发区/院校并将地域填为“中国大陆-西南”，“北京经济技术开发区（亦庄）”应完整保留官方名称和括号内别名并将地域填为“中国大陆-华北”。没有明确具体地点时该字段为空。
 每个非空字段给出原文证据和 0-1 置信度。金额保留原文，并拆分 value/currency/unit/note。只输出 JSON。""".format(regions="、".join(REGION_OPTIONS))
 
@@ -75,34 +82,58 @@ _MAINLAND_REGION_KEYWORDS = {
     "西北": ("陕西", "西安", "甘肃", "兰州", "青海", "西宁", "宁夏", "银川", "新疆", "乌鲁木齐"),
 }
 
-_ORGANIZATION_SUFFIX = (
-    r"(?:经济技术开发区|高新技术产业开发区|高新技术开发区|产业开发区|工业园区|产业园区|"
-    r"科技园区|开发区|经开区|高新区|产业园|工业园|科技园|大学|学院|学校|研究院|研究所|"
-    r"实验室|省|市|区|县|旗)"
+_DEVELOPMENT_ZONE_SUFFIXES = (
+    r"经济技术开发区|高新技术产业开发区|高新技术开发区|产业开发区|工业园区|产业园区|"
+    r"科技园区|开发区|经开区|高新区|产业园|工业园|科技园|生态城"
 )
+_DEVELOPMENT_ZONE_SUFFIX = rf"(?:{_DEVELOPMENT_ZONE_SUFFIXES})"
+_ORGANIZATION_SUFFIX = rf"(?:{_DEVELOPMENT_ZONE_SUFFIXES}|大学|学院|学校|研究院|研究所|实验室|省|市|区|县|旗)"
 _TYPED_ORGANIZATION_RE = re.compile(
     rf"^[\u4e00-\u9fffA-Za-z0-9·-]{{1,60}}{_ORGANIZATION_SUFFIX}(?:[（(][^）)\n]{{1,20}}[）)])?$"
 )
 _ATTRIBUTION_RE = re.compile(
-    rf"(?:落户(?:于)?|位于|选址(?:于)?|坐落(?:于)?|入驻(?:了)?|迁入|设在|建于|建设地点(?:为|是)|"
+    rf"(?:落户(?:于)?|落位(?:于)?|位于|选址(?:于)?|坐落(?:于)?|入驻(?:了)?|迁入|设在|建于|建设地点(?:为|是)|"
     rf"项目地址(?:为|是)|依托|联合|携手)\s*[“\"「『]?"
     rf"([\u4e00-\u9fffA-Za-z0-9·-]{{1,60}}?{_ORGANIZATION_SUFFIX}(?:[（(][^）)\n]{{1,20}}[）)])?)"
 )
 _KNOWN_PLACE_RE = re.compile(
-    rf"((?:北京|天津|上海|重庆|成都|深圳|广州|苏州|南京|无锡|常州|杭州|宁波|合肥|武汉|"
+    rf"((?:中新天津|北京|天津|上海|重庆|成都|深圳|广州|苏州|南京|无锡|常州|杭州|宁波|合肥|武汉|"
     rf"西安|厦门|青岛|济南|郑州|长沙|沈阳|大连|长春|哈尔滨|东莞|佛山|珠海)"
     rf"[\u4e00-\u9fffA-Za-z0-9·-]{{0,30}}?{_ORGANIZATION_SUFFIX}(?:[（(][^）)\n]{{1,20}}[）)])?)"
 )
+_ZONE_ATTRIBUTION_RE = re.compile(
+    rf"(?:落户(?:于)?|落位(?:于)?|位于|选址(?:于)?|坐落(?:于)?|入驻(?:了)?|迁入|设在|建于|建设地点(?:为|是)|项目地址(?:为|是))\s*[“\"「『]?"
+    rf"([\u4e00-\u9fffA-Za-z0-9·-]{{1,60}}?{_DEVELOPMENT_ZONE_SUFFIX}(?:[（(][^）)\n]{{1,20}}[）)])?)"
+)
+_KNOWN_ZONE_RE = re.compile(
+    rf"((?:中新天津|北京|天津|上海|重庆|成都|深圳|广州|苏州|南京|无锡|常州|杭州|宁波|合肥|武汉|"
+    rf"西安|厦门|青岛|济南|郑州|长沙|沈阳|大连|长春|哈尔滨|东莞|佛山|珠海)"
+    rf"[\u4e00-\u9fffA-Za-z0-9·-]{{0,30}}?{_DEVELOPMENT_ZONE_SUFFIX}(?:[（(][^）)\n]{{1,20}}[）)])?)"
+)
 _COMPANY_NAME_RE = re.compile(r"(?:有限责任公司|股份有限公司|有限公司|公司|集团|企业)$")
+_NON_NOUN_RE = re.compile(r"(?:落户|落位|位于|选址|坐落|入驻|迁入|设在|建设|投资|签约|合作|携手|联合|项目|公司|企业|计划|将于|已在|来源于|孵化)")
 
 
 def _is_specific_organization(value: str) -> bool:
     name = value.strip()
-    return bool(name) and not _COMPANY_NAME_RE.search(name)
+    if not name or _COMPANY_NAME_RE.search(name) or _NON_NOUN_RE.search(name):
+        return False
+    return bool(_TYPED_ORGANIZATION_RE.fullmatch(name) or re.fullmatch(r"[\u4e00-\u9fffA-Za-z0-9·-]{1,30}", name))
+
+
+def _development_zone_from_context(context: str) -> str:
+    for pattern in (_ZONE_ATTRIBUTION_RE, _KNOWN_ZONE_RE):
+        match = pattern.search(context or "")
+        if match:
+            return match.group(1).strip("  　，,。；;：:>、\"'“”‘’「」『』")
+    return ""
 
 
 def _organization_from_context(context: str) -> str:
     """Return only an explicitly typed place or academic/research organization."""
+    zone = _development_zone_from_context(context)
+    if zone:
+        return zone
     for pattern in (_ATTRIBUTION_RE, _KNOWN_PLACE_RE):
         match = pattern.search(context or "")
         if match:
@@ -121,7 +152,9 @@ def _normalize_region_and_organization(region: str, organization: str, context: 
     """Convert model output to the configured vocabulary without losing locality."""
     raw_region = (region or "").strip()
     raw_org = (organization or "").strip()
-    org = raw_org if _is_specific_organization(raw_org) else ""
+    # A development zone is the preferred entity when a source also mentions a school.
+    context_zone = _development_zone_from_context(context)
+    org = context_zone or (raw_org if _is_specific_organization(raw_org) else "")
     if not org and _TYPED_ORGANIZATION_RE.fullmatch(raw_region) and raw_region not in REGION_OPTIONS:
         org = raw_region
     if not org:
@@ -208,6 +241,14 @@ def _public_model_error(exc: Exception) -> str:
     return "模型接口响应无法解析"
 
 
+def _unique_records_by_info_type(records: list[ExtractedRecord]) -> list[ExtractedRecord]:
+    """Keep at most one structured record of each type for a source article."""
+    unique: dict[str, ExtractedRecord] = {}
+    for record in records:
+        unique.setdefault(record.info_type, record)
+    return list(unique.values())
+
+
 def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -> int:
     raw = ""
     retry_error = None
@@ -224,9 +265,10 @@ def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -
         article.status = "review_required"; article.error_message = f"{public_error}（已自动重试）"; article.llm_output = raw; article.model_name = setting.model_name
         return 0
 
+    records = _unique_records_by_info_type(result.records)
     source_name = db.scalar(select(Source.name).where(Source.id == article.source_id)) or ""
-    low_confidence = any(score < .6 for record in result.records for score in record.confidence.values())
-    for item in result.records:
+    low_confidence = any(score < .6 for record in records for score in record.confidence.values())
+    for item in records:
         amount = item.investment_amount
         region, organization = _normalize_region_and_organization(
             item.region, item.organization, f"{article.title}\n{article.body}"
@@ -239,22 +281,24 @@ def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -
             status="review_required" if low_confidence else "completed", amount_value=amount.value,
             amount_currency=amount.currency, amount_unit=amount.unit, amount_note=amount.note))
     article.status = "completed"; article.error_message = None; article.llm_output = raw; article.model_name = setting.model_name
-    return len(result.records)
+    return len(records)
 
 
-def structure_pending(db: Session, task_id: int) -> tuple[int, int]:
+def structure_pending(db: Session, task: CollectionTask) -> tuple[int, int]:
     setting = db.get(ModelSetting, 1)
-    articles = db.scalars(select(RawArticle).where(RawArticle.task_id == task_id, RawArticle.status == "pending")).all()
+    articles = db.scalars(select(RawArticle).where(RawArticle.task_id == task.id, RawArticle.status == "pending")).all()
     if not setting or not setting.enabled or not setting.api_key:
         if articles:
-            db.add(TaskLog(task_id=task_id, level="notice", message="模型未启用，原文已保存为待结构化"))
+            db.add(TaskLog(task_id=task.id, level="notice", message="模型未启用，原文已保存为待结构化"))
         return 0, 0
     count = failed = 0
     for article in articles:
         created = structure_article(db, article, setting)
         count += created
+        task.structured_count += created
         if article.status == "review_required":
             failed += 1
-            db.add(TaskLog(task_id=task_id, level="error", message=f"结构化待审核 {article.canonical_url}: {article.error_message}"))
+            task.failed_count += 1
+            db.add(TaskLog(task_id=task.id, level="error", message=f"结构化待审核 {article.canonical_url}: {article.error_message}"))
         db.commit()
     return count, failed
