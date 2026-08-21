@@ -173,8 +173,9 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
 function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, onCreateTask, creating, onAddSource, onLogs, onDetail, onHistory, onError }) {
   const [selected, setSelected] = useState([])
   const [startDate, setStartDate] = useState(meta.default_start_date || DEFAULT_DATE)
-  const [keywordFilter, setKeywordFilter] = useState(Boolean(keywordSetting.keyword_filter_enabled))
-  const [autoStructure, setAutoStructure] = useState(Boolean(keywordSetting.enabled))
+  // Both task options are enabled by default; users can opt out per task.
+  const [keywordFilter, setKeywordFilter] = useState(true)
+  const [autoStructure, setAutoStructure] = useState(true)
   useEffect(() => { setSelected(sources.filter((source) => source.enabled).map((source) => source.id)) }, [sources])
   useEffect(() => { setStartDate(meta.default_start_date || DEFAULT_DATE) }, [meta.default_start_date])
   const toggle = (id) => setSelected((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])
@@ -459,7 +460,7 @@ export default function App() {
   const activeLabel = useMemo(() => NAV.find((item) => item.id === view)?.label, [view])
 
   return <div className="app-shell">
-    <aside className={mobileNav ? 'open' : ''}><div className="brand"><span>芯</span><div><b>芯闻情报站</b><small>SEMI INTELLIGENCE</small></div></div><nav>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}</nav><div className="service-state"><i /><div><b>本地服务正常</b></div></div></aside>
+    <aside className={mobileNav ? 'open' : ''}><div className="brand"><span>芯</span><div><b>第二战线情报站</b><small>SEMI INTELLIGENCE</small></div></div><nav>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}</nav><div className="service-state"><i /><div><b>本地服务正常</b></div></div></aside>
     <div className="main-column"><header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(!mobileNav)} aria-label="菜单"><Menu /></button><span>{activeLabel}</span><div><button className="icon-btn" aria-label="刷新" onClick={refreshAll}><RefreshCw /></button></div></header>
       <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds }} onLogs={showLogs} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
     </div>

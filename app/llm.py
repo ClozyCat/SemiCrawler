@@ -64,7 +64,7 @@ class ModelOutputError(ValueError):
     pass
 
 
-SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不推测。单篇资料中每种资讯类型最多输出一条记录；同类型信息需整合到同一条记录中，不得因为包含多个项目或主体而拆分为多条。无结构化价值则 records 为空。
+SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不推测。每篇原文最终只能产出一条结构化记录；如果原文同时包含多种资讯类型，也只能输出一条记录，并从给定资讯类型列表中选择优先级最高的一种作为 `info_type`。其余资讯类型的事实要点必须简明概括并合并到这条记录的 `details` 中，不得拆分为多条。无结构化价值则 records 为空。
 资讯类型只能从给定枚举选择。地域只能从以下枚举中选择，并且必须使用完整名称：{regions}。
 “开发区/院校”只能填写项目或企业明确归属的具体地方、园区、学校或科研机构，例如省、市、区县、开发区、经开区、高新区、产业园、生态城、大学、学院、研究院、实验室。如果同一篇资料同时出现开发区/园区（包括经开区、高新区、产业园、生态城等）和院校/科研机构，该字段只填开发区/园区，不填院校。字段值必须是名词或专有名词短语，不得填写句子、动作或描述性短语；例如“天津芯擎科技技术主要来源于清华大学”不是合法字段值。企业、集团及其简称不是开发区/院校，必须填写到“企业名称”，严禁将公司名填入“开发区/院校”。
 中国大陆的具体地址不能直接写入地域：地域填对应的“中国大陆-大区”，具体地点填入“开发区/院校”。原文有明确的落户、位于、入驻、选址等归属关系时必须提取对应地点；例如“成都成华经开区”应填入开发区/院校并将地域填为“中国大陆-西南”，“北京经济技术开发区（亦庄）”应完整保留官方名称和括号内别名并将地域填为“中国大陆-华北”。没有明确具体地点时该字段为空。
@@ -241,12 +241,28 @@ def _public_model_error(exc: Exception) -> str:
     return "模型接口响应无法解析"
 
 
-def _unique_records_by_info_type(records: list[ExtractedRecord]) -> list[ExtractedRecord]:
-    """Keep at most one structured record of each type for a source article."""
-    unique: dict[str, ExtractedRecord] = {}
-    for record in records:
-        unique.setdefault(record.info_type, record)
-    return list(unique.values())
+def _one_record_per_article(records: list[ExtractedRecord]) -> list[ExtractedRecord]:
+    """Collapse model output to one record, honoring the configured type priority."""
+    if not records:
+        return []
+
+    priority = {info_type: index for index, info_type in enumerate(INFO_TYPES)}
+    ordered = sorted(records, key=lambda record: priority[record.info_type])
+    primary = ordered[0]
+
+    # Keep the highest-priority record's structured fields and fold all other
+    # extracted facts into details so no information is silently discarded.
+    additions: list[str] = []
+    seen_details = {primary.details.strip()} if primary.details else set()
+    for record in ordered[1:]:
+        detail = (record.details or "").strip()
+        if not detail or detail in seen_details:
+            continue
+        additions.append(f"{record.info_type}：{detail}")
+        seen_details.add(detail)
+    if additions:
+        primary.details = "\n".join(filter(None, [primary.details.strip(), *additions]))
+    return [primary]
 
 
 def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -> int:
@@ -265,7 +281,7 @@ def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -
         article.status = "review_required"; article.error_message = f"{public_error}（已自动重试）"; article.llm_output = raw; article.model_name = setting.model_name
         return 0
 
-    records = _unique_records_by_info_type(result.records)
+    records = _one_record_per_article(result.records)
     source_name = db.scalar(select(Source.name).where(Source.id == article.source_id)) or ""
     low_confidence = any(score < .6 for record in records for score in record.confidence.values())
     for item in records:

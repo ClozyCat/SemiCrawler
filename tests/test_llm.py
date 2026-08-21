@@ -158,6 +158,53 @@ def test_llm_keeps_only_one_record_per_info_type(monkeypatch):
         assert stored[0].project_name == "第一个项目"
 
 
+def test_llm_emits_one_record_and_uses_info_type_priority(monkeypatch):
+    records = [
+        {
+            "info_type": "建设开工",
+            "project_name": "封装产线",
+            "details": "封装产线已开工建设。",
+        },
+        {
+            "info_type": "项目立项",
+            "project_name": "封装产线",
+            "details": "封装产线完成项目立项。",
+        },
+    ]
+    monkeypatch.setattr(
+        "app.llm._call",
+        lambda setting, messages: json.dumps({"records": records}, ensure_ascii=False),
+    )
+    with SessionLocal() as db:
+        source = Source(name="单条记录测试", base_url="https://one.example.com", enabled=True, builtin=False, config_json="{}")
+        db.add(source)
+        db.flush()
+        article = RawArticle(
+            source_id=source.id,
+            canonical_url="https://one.example.com/a",
+            title="项目立项并开工",
+            body="项目已立项并开工建设。" * 5,
+            content_hash="o" * 64,
+            status="pending",
+        )
+        db.add(article)
+        db.commit()
+        db.refresh(article)
+
+        count = structure_article(
+            db,
+            article,
+            ModelSetting(base_url="https://api.example.com", model_name="mock", api_key="x", enabled=True),
+        )
+        db.commit()
+
+        stored = db.query(__import__("app.models", fromlist=["StructuredRecord"]).StructuredRecord).all()
+        assert count == 1
+        assert len(stored) == 1
+        assert stored[0].info_type == "项目立项"
+        assert "建设开工：封装产线已开工建设。" in stored[0].details
+
+
 def test_llm_empty_output_has_readable_error_after_retry(monkeypatch):
     monkeypatch.setattr("app.llm._call", lambda setting, messages: "")
     with SessionLocal() as db:
