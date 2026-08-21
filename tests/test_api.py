@@ -12,6 +12,7 @@ def test_defaults_sources_and_meta(client):
     assert meta.json()["default_start_date"] == "2026-08-01"
     assert "资讯类型" not in meta.json()["info_types"]
     assert "项目立项" in meta.json()["info_types"]
+    assert meta.json()["info_types"][:2] == ["项目规划", "项目立项"]
 
     sources = client.get("/api/sources").json()
     assert [item["name"] for item in sources] == ["全球半导体观察（DRAMx）", "半导体产业网"]

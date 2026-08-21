@@ -170,6 +170,11 @@ def test_llm_emits_one_record_and_uses_info_type_priority(monkeypatch):
             "project_name": "封装产线",
             "details": "封装产线完成项目立项。",
         },
+        {
+            "info_type": "项目规划",
+            "project_name": "封装产线",
+            "details": "封装产线纳入项目规划。",
+        },
     ]
     monkeypatch.setattr(
         "app.llm._call",
@@ -182,8 +187,8 @@ def test_llm_emits_one_record_and_uses_info_type_priority(monkeypatch):
         article = RawArticle(
             source_id=source.id,
             canonical_url="https://one.example.com/a",
-            title="项目立项并开工",
-            body="项目已立项并开工建设。" * 5,
+            title="项目规划、立项并开工",
+            body="项目已纳入规划、完成立项并开工建设。" * 5,
             content_hash="o" * 64,
             status="pending",
         )
@@ -201,7 +206,8 @@ def test_llm_emits_one_record_and_uses_info_type_priority(monkeypatch):
         stored = db.query(__import__("app.models", fromlist=["StructuredRecord"]).StructuredRecord).all()
         assert count == 1
         assert len(stored) == 1
-        assert stored[0].info_type == "项目立项"
+        assert stored[0].info_type == "项目规划"
+        assert "项目立项：封装产线完成项目立项。" in stored[0].details
         assert "建设开工：封装产线已开工建设。" in stored[0].details
 
 
