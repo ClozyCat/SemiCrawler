@@ -48,6 +48,25 @@ def keyword_values(config: list[dict[str, Any]]) -> list[str]:
     return list(dict.fromkeys(values))
 
 
+def keyword_groups(config: Any) -> dict[str, list[str]]:
+    """Return the three configured vocabularies, with legacy arrays as technical terms."""
+    if isinstance(config, list):
+        return {"technical": keyword_values(config), "industry_noun": [], "industry_verb": []}
+    if not isinstance(config, dict):
+        return {"technical": [], "industry_noun": [], "industry_verb": []}
+
+    aliases = {
+        "technical": ("technical", "technical_terms", "sheet1", "技术名词"),
+        "industry_noun": ("industry_noun", "industry_nouns", "sheet2", "项目名词"),
+        "industry_verb": ("industry_verb", "industry_verbs", "sheet3", "项目动词"),
+    }
+    groups: dict[str, list[str]] = {}
+    for name, keys in aliases.items():
+        raw = next((config[key] for key in keys if key in config), [])
+        groups[name] = keyword_values(raw if isinstance(raw, list) else [])
+    return groups
+
+
 def is_low_value_event_promotion(title: str, body: str) -> bool:
     """Identify event invitations/previews that lack a concrete industry event."""
     text = " ".join(f"{title}\n{body}".split())
@@ -145,7 +164,8 @@ def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
 
 def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
     config = validate_source_config(snapshot["base_url"], snapshot.get("config", {}))
-    keywords = keyword_values(json.loads(task.keyword_config_json or "[]")) if task.keyword_filter_enabled else []
+    configured = json.loads(task.keyword_config_json or "[]")
+    groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
     seen_urls: set[str] = set()
     discovered = saved = date_filtered = keyword_filtered = deduped = failed = 0
     delay = 60 / config.request.rate_limit_per_minute
@@ -178,8 +198,11 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
                         continue
                     if task.keyword_filter_enabled:
                         haystack = f"{article['title']}\n{article['body']}".casefold()
-                        if (not any(keyword and keyword in haystack for keyword in keywords)
-                                or is_low_value_event_promotion(article["title"], article["body"])):
+                        if isinstance(configured, dict):
+                            matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                        else:
+                            matched = any(keyword in haystack for keyword in groups.get("technical", []))
+                        if (not matched or is_low_value_event_promotion(article["title"], article["body"])):
                             keyword_filtered += 1
                             continue
                     digest = hashlib.sha256(" ".join(article["body"].split()).encode()).hexdigest()

@@ -61,7 +61,7 @@ class TaskCreate(BaseModel):
     start_date: date = date.fromisoformat(DEFAULT_START_DATE)
     keyword_filter_enabled: bool = False
     auto_structure_enabled: bool = False
-    keyword_config: list[dict[str, Any]] = Field(default_factory=list)
+    keyword_config: Any = Field(default_factory=list)
 
     @field_validator("source_ids")
     @classmethod
@@ -94,7 +94,7 @@ class TaskRead(BaseModel):
     completed_at: datetime | None
     keyword_filter_enabled: bool = False
     auto_structure_enabled: bool = False
-    keyword_config: list[dict[str, Any]] = Field(default_factory=list)
+    keyword_config: Any = Field(default_factory=list)
 
     @field_serializer("created_at", "started_at", "completed_at")
     def serialize_task_time(self, value: datetime | None) -> datetime | None:
@@ -211,7 +211,7 @@ class ModelSettingUpdate(BaseModel):
     model_name: str = Field(min_length=1, max_length=200)
     api_key: str | None = None
     enabled: bool = False
-    keyword_config: list[dict[str, Any]] = Field(default_factory=list)
+    keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False
 
 
@@ -221,5 +221,5 @@ class ModelSettingRead(BaseModel):
     enabled: bool
     has_api_key: bool
     api_key_hint: str
-    keyword_config: list[dict[str, Any]] = Field(default_factory=list)
+    keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False

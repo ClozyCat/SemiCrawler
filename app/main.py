@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .constants import DEFAULT_START_DATE, INFO_TYPES
 from .analytics import build_analytics
-from .crawler import run_task, test_source
+from .crawler import keyword_groups, run_task, test_source
 from .database import Base, SessionLocal, engine, get_db, migrate_legacy_database
 from .exporting import make_csv, make_xlsx
 from .models import CollectionTask, ExportRecord, ModelSetting, RawArticle, Source, SourceVersion, StructuredRecord, TaskLog, utc_now
@@ -264,10 +264,13 @@ def analytics_overview(
         select(RawArticle).where(RawArticle.id.in_(article_ids))).all()} if article_ids else {}
     setting = db.get(ModelSetting, 1)
     keyword_config = json.loads(setting.keyword_config_json or "[]") if setting else []
-    allowed_keywords = []
-    for row in keyword_config:
-        allowed_keywords.extend(part.strip() for part in re.split(r"[,，、;；\s]+", str(row.get("keywords") or "")) if len(part.strip()) > 1)
-    allowed_keywords = list(dict.fromkeys(allowed_keywords))
+    if isinstance(keyword_config, list):
+        allowed_keywords = []
+        for row in keyword_config:
+            allowed_keywords.extend(part.strip() for part in re.split(r"[,，、;；\s]+", str(row.get("keywords") or "")) if len(part.strip()) > 1)
+        allowed_keywords = list(dict.fromkeys(allowed_keywords))
+    else:
+        allowed_keywords = list(dict.fromkeys(term for terms in keyword_groups(keyword_config).values() for term in terms if len(term) > 1))
     return build_analytics(records, articles, max_nodes=max_nodes, max_keywords=max_keywords,
                            allowed_keywords=allowed_keywords)
 

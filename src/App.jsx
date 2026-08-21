@@ -7,6 +7,7 @@ import {
   Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload, Network, Maximize2, Minimize2,
 } from 'lucide-react'
 import { api } from './api'
+import * as XLSX from 'xlsx'
 
 const DEFAULT_DATE = '2026-08-01'
 const NAV = [
@@ -183,14 +184,15 @@ function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, on
     <div className="workspace-grid"><section className="panel source-panel"><div className="panel-head"><div><h2>创建采集任务</h2><p>来源配置将在创建时生成快照</p></div><span className="selected-count">已选 {selected.length}</span></div>
       <div className="source-list">{sources.map((source) => <label className={`source-row ${!source.enabled ? 'disabled' : ''}`} key={source.id}><input type="checkbox" checked={selected.includes(source.id)} disabled={!source.enabled} onChange={() => toggle(source.id)} /><span className="source-checkmark"><CheckCircle2 /></span><span className="source-copy"><b>{source.name}</b><small>{source.base_url}</small></span><span className={`source-kind ${source.builtin ? '' : 'custom'}`}>{source.builtin ? '内置' : '自定义'}</span></label>)}</div>
       <div className="task-options"><label className="check-field"><input type="checkbox" checked={keywordFilter} onChange={(e) => setKeywordFilter(e.target.checked)} /><span>启用关键词过滤</span></label><label className="check-field"><input type="checkbox" checked={autoStructure} onChange={(e) => setAutoStructure(e.target.checked)} /><span>自动 AI 结构化归档</span></label></div>
-      <div className="runbar"><label><CalendarDays /><span>资讯起始日期</span><input aria-label="资讯起始日期" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><button className="primary" disabled={!selected.length || creating || (keywordFilter && !keywordSetting.keyword_config?.length)} onClick={() => onCreateTask(selected, startDate, keywordFilter, autoStructure)}>{creating ? <LoaderCircle className="spin" /> : <Activity />}{creating ? '正在创建' : '创建任务'}</button></div>
-      {keywordFilter && !keywordSetting.keyword_config?.length && <p className="form-error task-hint">请先在“关键词配置”中添加至少一个关键词。</p>}
+      <div className="runbar"><label><CalendarDays /><span>资讯起始日期</span><input aria-label="资讯起始日期" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><button className="primary" disabled={!selected.length || creating || (keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length))} onClick={() => onCreateTask(selected, startDate, keywordFilter, autoStructure)}>{creating ? <LoaderCircle className="spin" /> : <Activity />}{creating ? '正在创建' : '创建任务'}</button></div>
+      {keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length) && <p className="form-error task-hint">请先在“关键词配置”中添加关键词。</p>}
     </section><TaskPanel task={tasks[0]} onLogs={onLogs} /></div>
     <DashboardRecordsPreview records={records} onDetail={onDetail} onHistory={onHistory} onError={onError} />
   </>
 }
 
-function parseCsv(text) {
+/* CSV import intentionally unsupported: keyword categories require workbook sheets. */
+function parseCsvLegacy(text) {
   const rows = []; let row = []; let cell = ''; let quoted = false
   for (let i = 0; i < text.length; i += 1) {
     const char = text[i]
@@ -201,30 +203,51 @@ function parseCsv(text) {
     else cell += char
   }
   row.push(cell.trim()); if (row.some(Boolean)) rows.push(row)
+  if (!rows.length) return []
+  // Older CSV exports have a header; hand-authored keyword files often do not.
+  const first = rows[0].map((value) => String(value).trim().toLowerCase())
+  const hasHeader = first.some((value) => ['所属行业', '行业', '细分领域', '产品及研究方向', '关键词', 'keywords'].includes(value))
+  const dataRows = hasHeader ? rows.slice(1) : rows
+  return dataRows.map((values) => ({ industry: values[0] || '', field: values[1] || '', keywords: values.slice(2).join('，') || (values.length === 1 ? values[0] : '') })).filter((item) => Object.values(item).some(Boolean))
+}
+
+function sheetRows(sheet) {
+  return XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
+    .flatMap((values) => values.filter((value) => String(value).trim()).map((value) => ({ keywords: String(value).trim() })))
+}
+
+function technicalSheetRows(sheet) {
+  const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '' })
   return rows.slice(1).map((values) => ({ industry: values[0] || '', field: values[1] || '', keywords: values.slice(2).join('，') })).filter((item) => Object.values(item).some(Boolean))
 }
 
 function KeywordsView({ setting, onSaved }) {
-  const [rows, setRows] = useState(setting.keyword_config || [])
+  const initial = setting.keyword_config && !Array.isArray(setting.keyword_config) ? setting.keyword_config : { technical: setting.keyword_config || [], industry_noun: [], industry_verb: [] }
+  const [groups, setGroups] = useState(initial)
+  const [tab, setTab] = useState('technical')
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
-  useEffect(() => setRows(setting.keyword_config || []), [setting.keyword_config])
-  const update = (index, key, value) => setRows((old) => old.map((item, i) => i === index ? { ...item, [key]: value } : item))
+  useEffect(() => { const next = setting.keyword_config && !Array.isArray(setting.keyword_config) ? setting.keyword_config : { technical: setting.keyword_config || [], industry_noun: [], industry_verb: [] }; setGroups(next) }, [setting.keyword_config])
+  const rows = groups[tab] || []
+  const update = (index, key, value) => setGroups((old) => ({ ...old, [tab]: old[tab].map((item, i) => i === index ? { ...item, [key]: value } : item) }))
   const upload = (event) => {
     const file = event.target.files?.[0]; if (!file) return
+    if (!file.name.toLowerCase().endsWith('.xlsx')) { setMessage('导入失败：仅支持 .xlsx 工作簿'); event.target.value = ''; return }
     file.arrayBuffer().then((buffer) => {
-      let text = new TextDecoder('utf-8').decode(buffer)
-      if (text.includes('\uFFFD')) text = new TextDecoder('gb18030').decode(buffer)
-      setRows(parseCsv(text)); setMessage(`已导入 ${parseCsv(text).length} 行，保存后生效`)
+      const workbook = XLSX.read(buffer, { type: 'array' })
+      const names = workbook.SheetNames
+      if (names.length < 3) { setMessage('导入失败：Excel 文件必须包含 Sheet1、Sheet2、Sheet3'); return }
+      const next = { technical: technicalSheetRows(workbook.Sheets[names[0]]), industry_noun: sheetRows(workbook.Sheets[names[1]]), industry_verb: sheetRows(workbook.Sheets[names[2]]) }
+      setGroups(next); setMessage('已导入关键词工作簿，保存后生效')
     })
   }
   const save = async () => {
     setSaving(true); setMessage('')
-    try { const saved = await api.saveModelSetting({ ...setting, api_key: '', keyword_config: rows.filter((row) => Object.values(row).some((v) => v.trim())) }); onSaved(saved); setMessage('关键词配置已保存') }
+    try { const cleaned = Object.fromEntries(Object.entries(groups).map(([key, values]) => [key, values.filter((row) => Object.values(row).some((v) => String(v).trim()))])); const saved = await api.saveModelSetting({ ...setting, api_key: '', keyword_config: cleaned }); onSaved(saved); setMessage('关键词配置已保存') }
     catch (err) { setMessage(err.message) } finally { setSaving(false) }
   }
-  return <><div className="title-row"><div><span className="eyebrow">采集过滤规则</span><h1>关键词配置</h1><p>按行业、细分领域和产品方向维护关键词，原文标题或正文命中任意层级即进入归档。</p></div><div className="keyword-actions"><label className="secondary button-file"><Upload />导入 CSV<input type="file" accept=".csv,text/csv" onChange={upload} /></label><button className="primary" onClick={save} disabled={saving}><Save />{saving ? '保存中' : '保存配置'}</button></div></div>
-    <section className="panel keyword-panel"><div className="table-wrap"><table className="keyword-table"><thead><tr><th>所属行业</th><th>细分领域</th><th>产品及研究方向</th><th aria-label="操作" /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}><td><input value={row.industry || ''} onChange={(e) => update(index, 'industry', e.target.value)} placeholder={index ? '同上可留空' : '例如：新型显示'} /></td><td><input value={row.field || ''} onChange={(e) => update(index, 'field', e.target.value)} placeholder="例如：Micro LED" /></td><td><textarea rows="2" value={row.keywords || ''} onChange={(e) => update(index, 'keywords', e.target.value)} placeholder="多个词用逗号或顿号分隔" /></td><td><button className="icon-btn" aria-label="删除此行" onClick={() => setRows((old) => old.filter((_, i) => i !== index))}><Trash2 /></button></td></tr>)}</tbody></table></div><button className="secondary add-keyword" onClick={() => setRows((old) => [...old, { industry: '', field: '', keywords: '' }])}><Plus />添加一行</button>{message && <p className="keyword-message">{message}</p>}</section></>
+  return <><div className="title-row"><div><span className="eyebrow">采集过滤规则</span><h1>关键词配置</h1><p>文章需同时命中技术名词、项目名词和项目动词才会进入归档。</p></div><div className="keyword-actions"><label className="secondary button-file"><Upload />导入 Excel<input type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" onChange={upload} /></label><button className="primary" onClick={save} disabled={saving}><Save />{saving ? '保存中' : '保存配置'}</button></div></div>
+    <section className="panel keyword-panel"><div className="keyword-tabs">{[['technical','技术名词'],['industry_noun','项目名词'],['industry_verb','项目动词']].map(([id,label]) => <button key={id} className={tab === id ? 'active' : ''} onClick={() => setTab(id)}>{label}</button>)}</div><div className="table-wrap"><table className="keyword-table"><thead><tr>{tab === 'technical' ? <><th>所属行业</th><th>细分领域</th><th>产品及研究方向（多个词用逗号或顿号分隔）</th></> : <th>词汇（多个词用逗号或顿号分隔）</th>}<th aria-label="操作" /></tr></thead><tbody>{rows.map((row, index) => <tr key={index}>{tab === 'technical' ? <><td><input value={row.industry || ''} onChange={(e) => update(index, 'industry', e.target.value)} placeholder={index ? '同上可留空' : '例如：新型显示'} /></td><td><input value={row.field || ''} onChange={(e) => update(index, 'field', e.target.value)} placeholder="例如：Micro LED" /></td></> : null}<td><textarea rows="2" value={row.keywords || ''} onChange={(e) => update(index, 'keywords', e.target.value)} placeholder="输入词汇" /></td><td><button className="icon-btn" aria-label="删除此行" onClick={() => setGroups((old) => ({ ...old, [tab]: old[tab].filter((_, i) => i !== index) }))}><Trash2 /></button></td></tr>)}</tbody></table></div><button className="secondary add-keyword" onClick={() => setGroups((old) => ({ ...old, [tab]: [...old[tab], tab === 'technical' ? { industry: '', field: '', keywords: '' } : { keywords: '' }] }))}><Plus />添加一行</button>{message && <p className="keyword-message">{message}</p>}</section></>
 }
 
 function AnalyticsGraph({ data, onNodeSelect, fullscreen = false }) {
