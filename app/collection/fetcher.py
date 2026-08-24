@@ -139,3 +139,86 @@ class SafeFetcher:
             headers=dict(response.headers), content=response.content, encoding=encoding,
             redirect_chain=chain, robots_status=robots_status,
         )
+
+
+class BrowserUnavailableError(RuntimeError):
+    """浏览器兜底未安装或启动失败。"""
+
+
+class PlaywrightFetcher:
+    """可选的 JavaScript 页面观察器，返回与 SafeFetcher 相同的数据契约。"""
+
+    def __init__(self, entry_url: str, allowed_hosts: set[str] | None = None,
+                 limits: FetchLimits | None = None):
+        self.entry_url = entry_url
+        self.allowed_hosts = allowed_hosts or set()
+        self.limits = limits or FetchLimits()
+        self._playwright = None
+        self._browser = None
+        self._context = None
+        self._safety_fetcher: SafeFetcher | None = None
+
+    def __enter__(self) -> "PlaywrightFetcher":
+        try:
+            from playwright.sync_api import sync_playwright
+        except ImportError as exc:
+            raise BrowserUnavailableError(
+                "浏览器执行器未启用：未安装 Playwright。请安装 playwright 并运行 playwright install chromium"
+            ) from exc
+        self._playwright = sync_playwright().start()
+        try:
+            self._safety_fetcher = SafeFetcher(self.entry_url, allowed_hosts=self.allowed_hosts, limits=self.limits)
+            self._browser = self._playwright.chromium.launch(headless=True)
+            self._context = self._browser.new_context(
+                user_agent=USER_AGENT, accept_downloads=False, service_workers="block",
+            )
+        except Exception:
+            self.close()
+            raise
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        self.close()
+
+    def close(self) -> None:
+        if self._context:
+            self._context.close()
+        if self._browser:
+            self._browser.close()
+        if self._playwright:
+            self._playwright.stop()
+        self._context = self._browser = self._playwright = None
+        if self._safety_fetcher:
+            self._safety_fetcher.close()
+        self._safety_fetcher = None
+
+    def fetch(self, url: str, method: str = "GET", form: dict[str, str] | None = None) -> PageResponse:
+        if method.upper() != "GET":
+            raise ValueError("浏览器兜底仅支持 GET 页面观察；表单 POST 请使用 HTTP 执行器")
+        validate_url(url, self.allowed_hosts or None)
+        if not self._context:
+            raise BrowserUnavailableError("浏览器执行器尚未启动，请使用上下文管理器")
+        robots_status = "browser_not_checked"
+        if self._safety_fetcher:
+            robots, robots_status = self._safety_fetcher._robots_rules(url)
+            if robots and not robots.can_fetch(USER_AGENT, url):
+                raise PermissionError(f"robots.txt 不允许采集 {url}")
+        page = self._context.new_page()
+        try:
+            page.goto(url, wait_until="domcontentloaded", timeout=int(self.limits.timeout_seconds * 1000))
+            try:
+                page.wait_for_load_state("networkidle", timeout=min(5000, int(self.limits.timeout_seconds * 1000)))
+            except Exception:
+                pass
+            final_url = page.url
+            validate_url(final_url, self.allowed_hosts or None)
+            content = page.content().encode("utf-8")
+            if len(content) > self.limits.max_response_bytes:
+                raise ResponseTooLargeError("浏览器页面超过大小限制")
+            return PageResponse(
+                requested_url=url, url=final_url, status_code=200,
+                headers={"content-type": "text/html; charset=utf-8", "x-transport": "browser"},
+                content=content, encoding="utf-8", robots_status=robots_status,
+            )
+        finally:
+            page.close()

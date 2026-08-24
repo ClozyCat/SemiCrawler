@@ -5,6 +5,7 @@ import re
 from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
+from typing import Any
 from urllib.parse import quote
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException, Query
@@ -16,13 +17,14 @@ from sqlalchemy.orm import Session
 from .constants import DEFAULT_START_DATE, INFO_TYPES
 from .analytics import build_analytics
 from .crawler import keyword_groups, run_task, test_source
+from .collection.adaptive import detect_and_validate
 from .database import Base, SessionLocal, engine, get_db, migrate_legacy_database
 from .exporting import make_csv, make_xlsx
-from .models import CollectionTask, ExportRecord, ModelSetting, RawArticle, Source, SourceVersion, StructuredRecord, TaskLog, utc_now
+from .models import CollectionMetric, CollectionTask, ExportRecord, ModelSetting, RawArticle, Source, SourceVersion, StructuredRecord, TaskLog, utc_now
 from .llm import structure_article
 from .schemas import (AnalyticsOverview, AppMeta, ArticleList, ArticleRead, LogRead, ModelSettingRead, ModelSettingUpdate, RecordDetail,
                       RecordList, RecordRead, RecordUpdate, SourceCreate, SourceRead, SourceTest, SourceUpdate,
-                      StructureResult, TaskCreate, TaskRead, DeleteIds)
+                      StructureResult, TaskCreate, TaskRead, DeleteIds, SourceProfileRead, CollectionMetricsRead)
 from .seed import seed_default_sources
 from .source_config import validate_source_config
 
@@ -134,6 +136,66 @@ def test_source_config(payload: SourceTest):
         raise HTTPException(422, f"试抓取失败: {exc}") from exc
 
 
+def _profile_summary(profile: dict[str, Any] | None) -> dict[str, Any]:
+    if not profile:
+        return {"status": "未探测", "confidence": None, "transport": None}
+    validation = profile.get("validation") or {}
+    return {
+        "status": "已验证", "content_kind": profile.get("content_kind"),
+        "transport": profile.get("transport", "http"),
+        "detection_method": profile.get("detection_method"),
+        "confidence": profile.get("confidence"), "profile_version": profile.get("profile_version", 1),
+        "fingerprint": (profile.get("fingerprint") or "")[:16],
+        "field_completeness": validation.get("field_completeness"),
+        "sample_items": validation.get("item_count", 0),
+        "last_validated_at": profile.get("last_validated_at"),
+    }
+
+
+@app.get("/api/sources/{source_id}/profile", response_model=SourceProfileRead)
+def get_source_profile(source_id: int, db: Session = Depends(get_db)):
+    source = db.get(Source, source_id)
+    if not source:
+        raise HTTPException(404, "来源不存在")
+    config = json.loads(source.config_json or "{}")
+    profile = config.get("learned_profile") if config.get("version") == 2 else None
+    return SourceProfileRead(source_id=source.id, learned=bool(profile), profile=profile,
+                             summary=_profile_summary(profile))
+
+
+@app.post("/api/sources/{source_id}/probe", response_model=SourceProfileRead)
+def probe_source(source_id: int, db: Session = Depends(get_db)):
+    source = db.get(Source, source_id)
+    if not source:
+        raise HTTPException(404, "来源不存在")
+    try:
+        from .source_config import SourceConfigV2, validate_source_config
+        from .crawler import _adaptive_allowed_hosts, _adaptive_fetcher, _persist_learned_profile
+        from .collection.fetcher import FetchLimits, PlaywrightFetcher
+        config = validate_source_config(source.base_url, json.loads(source.config_json or "{}"))
+        if not isinstance(config, SourceConfigV2):
+            raise ValueError("v1 来源请使用高级配置；自动探测仅支持 v2")
+        allowed_hosts = _adaptive_allowed_hosts(source.base_url, config)
+        try:
+            with _adaptive_fetcher(config, allowed_hosts) as fetcher:
+                profile = detect_and_validate(fetcher, config.entry_urls[0], sorted(allowed_hosts))
+        except Exception:
+            if not config.limits.browser_enabled:
+                raise
+            with PlaywrightFetcher(config.entry_urls[0], allowed_hosts=allowed_hosts,
+                                   limits=FetchLimits(timeout_seconds=config.limits.timeout_seconds,
+                                                       rate_limit_per_minute=config.limits.rate_limit_per_minute)) as fetcher:
+                profile = detect_and_validate(fetcher, config.entry_urls[0], sorted(allowed_hosts))
+                profile = profile.model_copy(update={"transport": "browser"})
+        _persist_learned_profile(db, {"id": source.id, "config": json.loads(source.config_json)}, config, profile)
+        db.commit()
+    except Exception as exc:
+        raise HTTPException(422, f"探测失败: {exc}") from exc
+    return SourceProfileRead(source_id=source.id, learned=True,
+                             profile=profile.model_dump(mode="json"),
+                             summary=_profile_summary(profile.model_dump(mode="json")))
+
+
 @app.post("/api/tasks", response_model=TaskRead, status_code=201)
 def create_task(payload: TaskCreate, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
     sources = db.scalars(select(Source).where(Source.id.in_(payload.source_ids), Source.enabled.is_(True))).all()
@@ -195,6 +257,32 @@ def get_logs(task_id: int, db: Session = Depends(get_db)):
     if not db.get(CollectionTask, task_id):
         raise HTTPException(404, "任务不存在")
     return db.scalars(select(TaskLog).where(TaskLog.task_id == task_id).order_by(TaskLog.id)).all()
+
+
+@app.get("/api/metrics/collection", response_model=CollectionMetricsRead)
+def collection_metrics(
+    task_id: int | None = None, source_id: int | None = None,
+    limit: int = Query(100, ge=1, le=1000), db: Session = Depends(get_db),
+):
+    query = select(CollectionMetric)
+    if task_id is not None:
+        query = query.where(CollectionMetric.task_id == task_id)
+    if source_id is not None:
+        query = query.where(CollectionMetric.source_id == source_id)
+    items = db.scalars(query.order_by(CollectionMetric.id.desc()).limit(limit)).all()
+    summary = {
+        "runs": len(items),
+        "duration_ms": sum(item.duration_ms for item in items),
+        "pages": sum(item.pages for item in items),
+        "discovered": sum(item.discovered for item in items),
+        "saved": sum(item.saved for item in items),
+        "deduplicated": sum(item.deduplicated for item in items),
+        "failed": sum(item.failed for item in items),
+        "rule_repairs": sum(item.rule_repairs for item in items),
+        "llm_calls": sum(item.llm_calls for item in items),
+        "estimated_cost": round(sum(item.estimated_cost for item in items), 6),
+    }
+    return CollectionMetricsRead(items=items, summary=summary)
 
 
 @app.delete("/api/tasks")

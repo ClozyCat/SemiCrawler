@@ -114,6 +114,39 @@ class LogRead(BaseModel):
         return _as_shanghai_time(value)
 
 
+class SourceProfileRead(BaseModel):
+    source_id: int
+    learned: bool
+    profile: dict[str, Any] | None = None
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
+class CollectionMetricRead(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+    id: int
+    task_id: int
+    source_id: int | None
+    source_name: str
+    transport: str
+    content_kind: str
+    duration_ms: int
+    pages: int
+    discovered: int
+    saved: int
+    deduplicated: int
+    failed: int
+    rule_repairs: int
+    llm_calls: int
+    estimated_cost: float
+    stop_reason: str | None
+    created_at: datetime
+
+
+class CollectionMetricsRead(BaseModel):
+    items: list[CollectionMetricRead]
+    summary: dict[str, Any] = Field(default_factory=dict)
+
+
 class RecordRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

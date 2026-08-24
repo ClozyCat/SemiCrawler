@@ -55,6 +55,7 @@ class SourceLimits(BaseModel):
     timeout_seconds: float = Field(default=20, ge=3, le=60)
     max_pages: int = Field(default=100, ge=1, le=1000)
     max_items: int = Field(default=5000, ge=1, le=100_000)
+    browser_enabled: bool = False
 
 
 class SourceConfigV2(BaseModel):

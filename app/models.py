@@ -78,6 +78,28 @@ class TaskLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
 
 
+class CollectionMetric(Base):
+    """Per-source task telemetry used for release checks and operations."""
+    __tablename__ = "collection_metrics"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    task_id: Mapped[int] = mapped_column(ForeignKey("collection_tasks.id"), index=True)
+    source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), index=True)
+    source_name: Mapped[str] = mapped_column(String(120), default="")
+    transport: Mapped[str] = mapped_column(String(30), default="http")
+    content_kind: Mapped[str] = mapped_column(String(30), default="unknown")
+    duration_ms: Mapped[int] = mapped_column(Integer, default=0)
+    pages: Mapped[int] = mapped_column(Integer, default=0)
+    discovered: Mapped[int] = mapped_column(Integer, default=0)
+    saved: Mapped[int] = mapped_column(Integer, default=0)
+    deduplicated: Mapped[int] = mapped_column(Integer, default=0)
+    failed: Mapped[int] = mapped_column(Integer, default=0)
+    rule_repairs: Mapped[int] = mapped_column(Integer, default=0)
+    llm_calls: Mapped[int] = mapped_column(Integer, default=0)
+    estimated_cost: Mapped[float] = mapped_column(default=0.0)
+    stop_reason: Mapped[str | None] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class RawArticle(Base):
     __tablename__ = "raw_articles"
     __table_args__ = (UniqueConstraint("source_id", "source_item_key", name="uq_raw_articles_source_item_key"),)

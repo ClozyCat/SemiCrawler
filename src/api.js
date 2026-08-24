@@ -97,10 +97,13 @@ export const api = {
   addSource: (source) => request('/sources', { method: 'POST', body: JSON.stringify(source) }),
   updateSource: (id, source) => request(`/sources/${id}`, { method: 'PATCH', body: JSON.stringify(source) }),
   testSource: (source) => request('/sources/test', { method: 'POST', body: JSON.stringify(source) }),
+  sourceProfile: (id) => request(`/sources/${id}/profile`),
+  probeSource: (id) => request(`/sources/${id}/probe`, { method: 'POST' }),
   tasks: () => request('/tasks'),
   createTask: (task) => request('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   task: (id) => request(`/tasks/${id}`),
   logs: (id) => request(`/tasks/${id}/logs`),
+  collectionMetrics: (params = {}) => request(`/metrics/collection?${queryString(params)}`),
   deleteTasks: (ids) => request('/tasks', { method: 'DELETE', body: JSON.stringify({ ids }) }),
   records: (params = {}) => {
     const query = queryString(params)

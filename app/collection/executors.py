@@ -27,10 +27,12 @@ class CollectionExecutor:
         self.fetcher = fetcher
         self.inspector = inspector or PageInspector()
         self.extractor = extractor or RecordExtractor()
+        self.last_stop_reason: str | None = None
 
     def pages(self, profile: CollectionProfile, max_pages: int, max_items: int,
               start_date: date | None = None) -> Iterator[RecordPage]:
         pagination = profile.pagination
+        self.last_stop_reason = None
         page = pagination.start_page
         current_url = profile.entry
         total_items = 0
@@ -55,15 +57,21 @@ class CollectionExecutor:
             yield RecordPage(number=page, response=response, items=items)
             total_items += len(items)
             if total_items >= max_items or pagination.kind == "none" or not items:
+                self.last_stop_reason = (
+                    "达到条目上限" if total_items >= max_items else
+                    "规则无分页" if pagination.kind == "none" else "页面没有解析出记录"
+                )
                 return
             dates = [item.published_at for item in items if item.published_at]
             if start_date and profile.date_order == "descending" and dates and min(dates) < start_date:
+                self.last_stop_reason = "遇到早于起始日期的页面"
                 return
             if pagination.kind == "link":
                 observation = self.inspector.inspect(response)
                 next_link = next((link for link in observation.links
                                   if link.rel.casefold() == "next" or re.search(r"下一页|下页|next", link.text, re.I)), None)
                 if not next_link or next_link.url == current_url:
+                    self.last_stop_reason = "没有下一页链接"
                     return
                 current_url = next_link.url
             page += 1

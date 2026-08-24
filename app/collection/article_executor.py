@@ -27,9 +27,11 @@ class ArticleCollectionExecutor:
         self.inspector = inspector or PageInspector()
         self.extractor = extractor or ArticleExtractor()
         self.llm_fallback = llm_fallback
+        self.last_stop_reason: str | None = None
 
     def _listing_responses(self, profile: CollectionProfile, max_pages: int):
         pagination = profile.pagination
+        self.last_stop_reason = None
         page = pagination.start_page
         current = profile.entry
         for offset in range(max_pages):
@@ -49,12 +51,14 @@ class ArticleCollectionExecutor:
                 response = self.fetcher.fetch(current)
             yield response
             if pagination.kind == "none":
+                self.last_stop_reason = "规则无分页"
                 return
             if pagination.kind == "link":
                 observation = self.inspector.inspect(response)
                 link = next((item for item in observation.links if item.rel.casefold() == "next"
                              or re.search(r"下一页|下页|next", item.text, re.I)), None)
                 if not link or link.url == current:
+                    self.last_stop_reason = "没有下一页链接"
                     return
                 current = link.url
             page += 1
@@ -65,6 +69,7 @@ class ArticleCollectionExecutor:
         if not discovery:
             raise ValueError("文章规则缺少发现方式")
         seen: set[str] = set()
+        self.last_stop_reason = None
 
         def emit(values: list[DiscoveredUrl]):
             for value in values:
@@ -93,6 +98,7 @@ class ArticleCollectionExecutor:
             values = discover_html_links(response, discovery.article_url_pattern)
             yield from emit(values)
             if len(seen) >= max_items:
+                self.last_stop_reason = "达到条目上限"
                 return
 
     def items(self, profile: CollectionProfile, max_pages: int, max_items: int,
@@ -100,6 +106,7 @@ class ArticleCollectionExecutor:
         for discovered in self.discovered(profile, max_pages, max_items):
             if start_date and discovered.published_at and discovered.published_at < start_date:
                 if profile.date_order == "descending":
+                    self.last_stop_reason = "遇到早于起始日期的文章"
                     return
                 continue
             try:

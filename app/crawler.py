@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import time
+from contextlib import ExitStack
 from datetime import date, datetime
 from functools import lru_cache
 from typing import Any
@@ -16,12 +17,12 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .llm import structure_pending
-from .models import CollectionTask, ModelSetting, RawArticle, Source, SourceVersion, TaskLog, utc_now
+from .models import CollectionMetric, CollectionTask, ModelSetting, RawArticle, Source, SourceVersion, TaskLog, utc_now
 from .source_config import SourceConfig, SourceConfigV2, validate_source_config
 from .collection.adaptive import detect_and_validate
 from .collection.article_executor import ArticleCollectionExecutor
 from .collection.executors import CollectionExecutor
-from .collection.fetcher import FetchLimits, SafeFetcher
+from .collection.fetcher import BrowserUnavailableError, FetchLimits, PlaywrightFetcher, SafeFetcher
 from .collection.profiles import CollectionProfile
 from .collection.probe_agent import ProbeAgent
 
@@ -237,6 +238,26 @@ def _adaptive_profile(db: Session, task: CollectionTask, snapshot: dict[str, Any
         db.commit()
         return profile
     except Exception as deterministic_error:
+        if config.limits.browser_enabled:
+            try:
+                with PlaywrightFetcher(config.entry_urls[0], allowed_hosts=allowed_hosts,
+                                       limits=FetchLimits(timeout_seconds=config.limits.timeout_seconds,
+                                                           rate_limit_per_minute=config.limits.rate_limit_per_minute)) as browser:
+                    profile = detect_and_validate(browser, config.entry_urls[0], sorted(allowed_hosts))
+                    profile = profile.model_copy(update={"transport": "browser"})
+                    _persist_learned_profile(db, snapshot, config, profile)
+                    db.add(TaskLog(task_id=task.id, level="notice", message=(
+                        f"浏览器兜底探测完成：{profile.content_kind}，规则版本 {profile.profile_version}，"
+                        f"置信度 {profile.confidence:.0%}"
+                    )))
+                    db.commit()
+                    return profile
+            except BrowserUnavailableError as browser_error:
+                db.add(TaskLog(task_id=task.id, level="error", message=str(browser_error)))
+                db.commit()
+            except Exception as browser_error:
+                db.add(TaskLog(task_id=task.id, level="notice", message=f"浏览器兜底失败: {browser_error}"))
+                db.commit()
         setting = db.get(ModelSetting, 1)
         if not setting or not setting.enabled or not setting.api_key:
             raise ValueError(f"确定性探测失败，模型未启用: {deterministic_error}") from deterministic_error
@@ -258,7 +279,21 @@ def collect_adaptive_source(db: Session, task: CollectionTask, snapshot: dict[st
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
     allowed_hosts = _adaptive_allowed_hosts(snapshot["base_url"], config)
     saved = deduped = failed = discovered = date_filtered = keyword_filtered = 0
-    with _adaptive_fetcher(config, allowed_hosts) as fetcher:
+    with ExitStack() as fetch_stack:
+        learned_transport = ((config.learned_profile or {}).get("transport") if config.learned_profile else None)
+        try:
+            if learned_transport == "browser":
+                fetcher = fetch_stack.enter_context(PlaywrightFetcher(
+                    config.entry_urls[0], allowed_hosts=allowed_hosts,
+                    limits=FetchLimits(timeout_seconds=config.limits.timeout_seconds,
+                                        rate_limit_per_minute=config.limits.rate_limit_per_minute),
+                ))
+            else:
+                fetcher = fetch_stack.enter_context(_adaptive_fetcher(config, allowed_hosts))
+        except BrowserUnavailableError as exc:
+            db.add(TaskLog(task_id=task.id, level="error", message=str(exc)))
+            db.commit()
+            raise ValueError(str(exc)) from exc
         if config.learned_profile:
             profile = CollectionProfile.model_validate(config.learned_profile)
             try:
@@ -279,6 +314,26 @@ def collect_adaptive_source(db: Session, task: CollectionTask, snapshot: dict[st
                 profile = _adaptive_profile(db, task, snapshot, config, fetcher, allowed_hosts, force_reprobe=True)
         else:
             profile = _adaptive_profile(db, task, snapshot, config, fetcher, allowed_hosts)
+
+        # A profile discovered by browser fallback must be executed by the same
+        # browser transport for the remainder of this task.
+        if profile.transport == "browser" and not isinstance(fetcher, PlaywrightFetcher):
+            try:
+                fetcher = fetch_stack.enter_context(PlaywrightFetcher(
+                    config.entry_urls[0], allowed_hosts=allowed_hosts,
+                    limits=FetchLimits(timeout_seconds=config.limits.timeout_seconds,
+                                        rate_limit_per_minute=config.limits.rate_limit_per_minute),
+                ))
+            except BrowserUnavailableError as exc:
+                db.add(TaskLog(task_id=task.id, level="error", message=str(exc)))
+                db.commit()
+                raise ValueError(str(exc)) from exc
+
+        db.add(TaskLog(task_id=task.id, message=(
+            f"采集执行器：{profile.transport}；规则版本 {profile.profile_version}；"
+            f"页面指纹 {profile.fingerprint[:12]}"
+        )))
+        db.commit()
 
         if profile.content_kind == "articles":
             executor = ArticleCollectionExecutor(fetcher)
@@ -319,6 +374,7 @@ def collect_adaptive_source(db: Session, task: CollectionTask, snapshot: dict[st
                     content_hash=digest, status="pending",
                 ))
                 saved += 1; task.fetched_count += 1
+            db.add(TaskLog(task_id=task.id, message=f"文章采集停止：{executor.last_stop_reason or '达到配置页数上限'}"))
             db.commit()
             return saved, deduped, failed, discovered, date_filtered, keyword_filtered
 
@@ -364,6 +420,8 @@ def collect_adaptive_source(db: Session, task: CollectionTask, snapshot: dict[st
                 f"表格第 {page.number} 页：解析 {len(page.items)} 条，累计保存 {saved} 条"
             )))
             db.commit()
+        db.add(TaskLog(task_id=task.id, message=f"表格采集停止：{executor.last_stop_reason or '达到配置页数上限'}"))
+        db.commit()
     return saved, deduped, failed, discovered, date_filtered, keyword_filtered
 
 
@@ -445,12 +503,61 @@ def run_task(db: Session, task: CollectionTask) -> None:
     task.status = "running"; task.started_at = utc_now(); db.commit()
     totals = [0, 0, 0, 0, 0, 0]
     for snapshot in json.loads(task.source_snapshot_json):
+        started = time.perf_counter()
+        log_id_before = db.scalar(select(func.max(TaskLog.id)).where(TaskLog.task_id == task.id)) or 0
+        repair_before = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%自动修复%")
+        )) or 0
+        page_before = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%第%页%")
+        )) or 0
+        llm_before = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%模型探测%")
+        )) or 0
+        source_config = snapshot.get("config") or {}
+        learned = source_config.get("learned_profile") or {}
         try:
             values = collect_source(db, task, snapshot)
         except Exception as exc:
             values = (0, 0, 1, 0, 0, 0)
             task.failed_count += 1
             db.add(TaskLog(task_id=task.id, level="error", message=f"来源配置失败 {snapshot['name']}: {exc}"))
+        repair_count = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%自动修复%")
+        )) or 0
+        repair_count = max(0, repair_count - repair_before)
+        page_logs = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%第%页%")
+        )) or 0
+        page_logs = max(0, page_logs - page_before)
+        llm_calls = db.scalar(select(func.count(TaskLog.id)).where(
+            TaskLog.task_id == task.id, TaskLog.message.like("%模型探测%")
+        )) or 0
+        llm_calls = max(0, llm_calls - llm_before)
+        learned = (snapshot.get("config") or {}).get("learned_profile") or learned
+        execution_log = db.scalar(select(TaskLog.message).where(
+            TaskLog.task_id == task.id, TaskLog.id > log_id_before,
+            TaskLog.message.like("采集执行器：%")
+        ).order_by(TaskLog.id.desc()).limit(1))
+        if execution_log:
+            execution_parts = execution_log.split("；")
+            if execution_parts:
+                learned = {**learned, "transport": execution_parts[0].split("：", 1)[-1]}
+            if len(execution_parts) >= 2 and "规则版本" in execution_parts[1]:
+                learned = {**learned, "content_kind": learned.get("content_kind", "unknown")}
+        stop_message = db.scalar(select(TaskLog.message).where(
+            TaskLog.task_id == task.id, TaskLog.id > log_id_before,
+            TaskLog.message.like("%采集停止%"),
+        ).order_by(TaskLog.id.desc()).limit(1))
+        stop_reason = stop_message.split("：", 1)[-1] if stop_message else ("失败" if values[2] else None)
+        db.add(CollectionMetric(
+            task_id=task.id, source_id=snapshot.get("id"), source_name=snapshot.get("name", ""),
+            transport=learned.get("transport", "http"), content_kind=learned.get("content_kind", "unknown"),
+            duration_ms=round((time.perf_counter() - started) * 1000), pages=page_logs,
+            discovered=values[3], saved=values[0], deduplicated=values[1], failed=values[2],
+            rule_repairs=repair_count, llm_calls=llm_calls, estimated_cost=0.0,
+            stop_reason=stop_reason,
+        ))
         totals = [a + b for a, b in zip(totals, values)]; db.commit()
     structured, llm_failed = structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
     task.fetched_count, task.deduplicated_count, task.structured_count = totals[0], totals[1], structured

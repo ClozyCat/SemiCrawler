@@ -89,7 +89,7 @@ class ArticleDiscoveryProfile(BaseModel):
 class CollectionProfile(BaseModel):
     profile_version: int = 1
     content_kind: Literal["table_records", "articles"] = "table_records"
-    transport: Literal["http"] = "http"
+    transport: Literal["http", "browser"] = "http"
     source_url: str
     entry: str
     table_index: int = 0

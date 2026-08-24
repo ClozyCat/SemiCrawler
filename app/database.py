@@ -125,6 +125,31 @@ def migrate_legacy_database() -> None:
     }
     with engine.begin() as connection:
         inspector = inspect(connection)
+        if "collection_metrics" not in inspector.get_table_names() and connection.dialect.name == "sqlite":
+            connection.execute(text("""
+                CREATE TABLE collection_metrics (
+                    id INTEGER NOT NULL PRIMARY KEY,
+                    task_id INTEGER NOT NULL REFERENCES collection_tasks(id),
+                    source_id INTEGER REFERENCES sources(id),
+                    source_name VARCHAR(120) NOT NULL DEFAULT '',
+                    transport VARCHAR(30) NOT NULL DEFAULT 'http',
+                    content_kind VARCHAR(30) NOT NULL DEFAULT 'unknown',
+                    duration_ms INTEGER NOT NULL DEFAULT 0,
+                    pages INTEGER NOT NULL DEFAULT 0,
+                    discovered INTEGER NOT NULL DEFAULT 0,
+                    saved INTEGER NOT NULL DEFAULT 0,
+                    deduplicated INTEGER NOT NULL DEFAULT 0,
+                    failed INTEGER NOT NULL DEFAULT 0,
+                    rule_repairs INTEGER NOT NULL DEFAULT 0,
+                    llm_calls INTEGER NOT NULL DEFAULT 0,
+                    estimated_cost FLOAT NOT NULL DEFAULT 0,
+                    stop_reason VARCHAR(200),
+                    created_at DATETIME NOT NULL
+                )
+            """))
+            connection.execute(text("CREATE INDEX ix_collection_metrics_task_id ON collection_metrics (task_id)"))
+            connection.execute(text("CREATE INDEX ix_collection_metrics_source_id ON collection_metrics (source_id)"))
+            inspector = inspect(connection)
         for table, columns in additions.items():
             if table not in inspector.get_table_names():
                 continue

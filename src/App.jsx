@@ -20,11 +20,8 @@ const NAV = [
 ]
 const EMPTY_FORM = {
   name: '', base_url: '', enabled: true,
-  config: JSON.stringify({
-    entry_urls: ['https://example.com/news'], article_url_pattern: '/news/',
-    selectors: { list_links: 'article a', title: 'h1', date: '.publish-date', content: '.content' },
-    request: { rate_limit_per_minute: 20, timeout_seconds: 20 },
-  }, null, 2),
+  config: JSON.stringify({ version: 2, entry_urls: ['https://example.com/public'], mode: 'auto',
+    allowed_hosts: [], content_hint: '', limits: { rate_limit_per_minute: 12, timeout_seconds: 20, max_pages: 100, max_items: 5000, browser_enabled: false }, learned_profile: null }, null, 2),
 }
 
 function formatTime(value) {
@@ -61,6 +58,16 @@ function SourceForm({ source, onClose, onSaved }) {
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
   const [preview, setPreview] = useState(null)
+  const [advanced, setAdvanced] = useState(Boolean(source && source.config?.version !== 2))
+  const parsedConfig = () => { try { return JSON.parse(form.config) } catch { return {} } }
+  const config = parsedConfig()
+  const isV2 = config.version === 2 && !advanced
+  const updateV2 = (path, value) => {
+    const next = JSON.parse(JSON.stringify(config.version === 2 ? config : JSON.parse(EMPTY_FORM.config)))
+    const [section, key] = path.split('.')
+    if (key) next[section] = { ...(next[section] || {}), [key]: value }; else next[section] = value
+    setForm((old) => ({ ...old, config: JSON.stringify(next, null, 2) }))
+  }
   const submit = async (event) => {
     event.preventDefault(); setError(''); setSaving(true)
     try {
@@ -86,8 +93,13 @@ function SourceForm({ source, onClose, onSaved }) {
       <div className="modal-body form-grid">
         <label className="field"><span>来源名称</span><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：某开发区官网" /></label>
         <label className="field"><span>站点地址</span><input required type="url" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://example.com" /></label>
-        <label className="field full"><span>JSON 来源配置</span><textarea rows="14" value={form.config} onChange={(e) => setForm({ ...form, config: e.target.value })} spellCheck="false" /></label>
-        <div className="file-row full"><label className="secondary button-file"><FileJson />上传 JSON<input type="file" accept=".json,application/json" onChange={readFile} /></label><button type="button" className="secondary" onClick={test} disabled={testing}>{testing ? <LoaderCircle className="spin" /> : <FlaskConical />}试抓取</button><span>保存前会校验域名、正则与选择器。</span></div>
+        {isV2 ? <>
+          <label className="field full"><span>入口 URL</span><input type="url" required value={config.entry_urls?.[0] || form.base_url} onChange={(e) => updateV2('entry_urls', [e.target.value])} /></label>
+          <label className="field full"><span>数据含义提示 <small>可选</small></span><input value={config.content_hint || ''} onChange={(e) => updateV2('content_hint', e.target.value)} placeholder="例如：公开项目审批结果" /></label>
+          <label className="field"><span>每分钟请求数</span><input type="number" min="1" max="120" value={config.limits?.rate_limit_per_minute || 12} onChange={(e) => updateV2('limits.rate_limit_per_minute', Number(e.target.value))} /></label>
+          <label className="field"><span>浏览器兜底</span><span className="check-field"><input type="checkbox" checked={Boolean(config.limits?.browser_enabled)} onChange={(e) => updateV2('limits.browser_enabled', e.target.checked)} /><span>仅 JS 页面启用</span></span></label>
+        </> : <label className="field full"><span>高级 JSON 来源配置</span><textarea rows="14" value={form.config} onChange={(e) => setForm({ ...form, config: e.target.value })} spellCheck="false" /></label>}
+        <div className="file-row full"><button type="button" className="text-btn" onClick={() => setAdvanced(!advanced)}>{advanced ? '切换基础模式' : '高级配置'}</button><label className="secondary button-file"><FileJson />上传 JSON<input type="file" accept=".json,application/json" onChange={readFile} /></label><button type="button" className="secondary" onClick={test} disabled={testing}>{testing ? <LoaderCircle className="spin" /> : <FlaskConical />}试抓取</button><span>{isV2 ? '系统会自动探测并验证页面结构。' : '保存前会校验域名、正则与选择器。'}</span></div>
         {preview && <div className="preview full"><b>{preview.title}</b><span>{preview.published_at || preview.published_text} · 正文 {preview.body_length} 字</span><p>{preview.first_paragraph}</p><a href={preview.url} target="_blank" rel="noreferrer">打开样文<ExternalLink /></a></div>}
         {error && <p className="form-error full">{error}</p>}
       </div>
@@ -307,9 +319,14 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
   </>
 }
 
-function SourcesView({ sources, onAdd, onEdit, onToggle }) {
-  return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>维护可持久化的 JSON 适配配置与启用状态。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
-    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b><a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a><span>{source.builtin ? '内置来源' : '自定义'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
+function SourcesView({ sources, onAdd, onEdit, onToggle, onProfile, onProbe }) {
+  const [profiles, setProfiles] = useState({})
+  const [probing, setProbing] = useState(null)
+  const inspect = async (source) => { try { const profile = await api.sourceProfile(source.id); setProfiles((old) => ({ ...old, [source.id]: profile })) } catch { /* source may be v1 */ } }
+  useEffect(() => { sources.filter((source) => source.config?.version === 2).forEach(inspect) }, [sources])
+  const reprobe = async (source) => { setProbing(source.id); try { const result = await api.probeSource(source.id); setProfiles((old) => ({ ...old, [source.id]: result })); onProbe?.(result) } catch (err) { onProbe?.({ error: err.message }) } finally { setProbing(null) } }
+  return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>基础模式自动探测页面结构；已验证规则会在任务中复用。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
+    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址</span><span>探测状态</span><span>状态</span><span>操作</span></div>{sources.map((source) => { const profile = profiles[source.id]; const summary = profile?.summary; return <div className="management-row" key={source.id}><b>{source.name}</b><a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a><span>{source.config?.version === 2 ? (summary?.status === '已验证' ? `${summary.content_kind === 'table_records' ? '表格记录' : '文章'} · ${Math.round((summary.confidence || 0) * 100)}%` : '待探测') : 'v1 高级规则'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><div className="source-actions"><button className="text-btn" onClick={() => onEdit(source)}>编辑</button>{source.config?.version === 2 && <button className="text-btn" disabled={probing === source.id} onClick={() => reprobe(source)}>{probing === source.id ? '探测中' : '重新探测'}</button>}</div></div>})}</section>
   </>
 }
 
@@ -462,7 +479,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className={mobileNav ? 'open' : ''}><div className="brand"><span>芯</span><div><b>第二战线情报站</b><small>SEMI INTELLIGENCE</small></div></div><nav>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}</nav><div className="service-state"><i /><div><b>本地服务正常</b></div></div></aside>
     <div className="main-column"><header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(!mobileNav)} aria-label="菜单"><Menu /></button><span>{activeLabel}</span><div><button className="icon-btn" aria-label="刷新" onClick={refreshAll}><RefreshCw /></button></div></header>
-      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds }} onLogs={showLogs} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
+      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} onProbe={(result) => result?.error && setError(result.error)} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds }} onLogs={showLogs} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
     </div>
     {mobileNav && <button className="nav-backdrop" aria-label="关闭菜单" onClick={() => setMobileNav(false)} />}
     {sourceModal && <SourceForm source={sourceModal === 'new' ? null : sourceModal} onClose={() => setSourceModal(null)} onSaved={sourceSaved} />}
