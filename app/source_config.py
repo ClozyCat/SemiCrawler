@@ -77,6 +77,12 @@ class SourceConfigV2(BaseModel):
             hosts.append(host)
         return list(dict.fromkeys(hosts))
 
+    @model_validator(mode="after")
+    def profile_mode_has_profile(self):
+        if self.mode == "profile" and not self.learned_profile:
+            raise ValueError("profile 模式必须包含后端生成的已学习规则")
+        return self
+
 
 def validate_source_config(base_url: str, config: dict[str, Any]) -> SourceConfig | SourceConfigV2:
     version = config.get("version", 1) if isinstance(config, dict) else None

@@ -67,7 +67,10 @@ class SafeFetcher:
             validate_url(current, self.allowed_hosts)
             with self._request_lock:
                 self._throttle()
-                with self._client.stream(method, current, data=data) as response:
+                with self._client.stream(
+                    method, current, data=data if method == "POST" else None,
+                    params=data if method == "GET" else None,
+                ) as response:
                     stream = response.extensions.get("network_stream")
                     peer = stream.get_extra_info("server_addr") if stream else None
                     if peer:

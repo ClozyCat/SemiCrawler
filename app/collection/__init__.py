@@ -1,5 +1,6 @@
 """Adaptive collection primitives shared by detectors and executors."""
 
-from .profiles import ArticleItem, PageResponse, RecordItem
+from .profiles import ArticleItem, CollectionProfile, PageResponse, RecordItem
+from .probe_agent import ProbeAgent, ProbeDecision
 
-__all__ = ["ArticleItem", "PageResponse", "RecordItem"]
+__all__ = ["ArticleItem", "CollectionProfile", "PageResponse", "ProbeAgent", "ProbeDecision", "RecordItem"]

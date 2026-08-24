@@ -12,12 +12,18 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 from bs4 import BeautifulSoup
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from .llm import structure_pending
-from .models import CollectionTask, RawArticle, TaskLog, utc_now
-from .source_config import SourceConfig, validate_source_config
+from .models import CollectionTask, ModelSetting, RawArticle, Source, SourceVersion, TaskLog, utc_now
+from .source_config import SourceConfig, SourceConfigV2, validate_source_config
+from .collection.adaptive import detect_and_validate
+from .collection.article_executor import ArticleCollectionExecutor
+from .collection.executors import CollectionExecutor
+from .collection.fetcher import FetchLimits, SafeFetcher
+from .collection.profiles import CollectionProfile
+from .collection.probe_agent import ProbeAgent
 
 USER_AGENT = "SemiCrawler/1.0 (+public-news-collector)"
 
@@ -152,6 +158,21 @@ def discover_listing(html: str, page_url: str, config: SourceConfig) -> tuple[li
 
 def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
     config = validate_source_config(base_url, raw_config)
+    if isinstance(config, SourceConfigV2):
+        allowed_hosts = _adaptive_allowed_hosts(base_url, config)
+        with _adaptive_fetcher(config, allowed_hosts) as fetcher:
+            profile = (CollectionProfile.model_validate(config.learned_profile) if config.learned_profile
+                       else detect_and_validate(fetcher, config.entry_urls[0], sorted(allowed_hosts)))
+            page = next(CollectionExecutor(fetcher).pages(profile, max_pages=1, max_items=20), None)
+            if not page or not page.items:
+                raise ValueError("已验证规则没有解析出预览记录")
+            item = page.items[0]
+            return {
+                "url": item.canonical_url, "title": item.title, "published_at": item.published_at,
+                "published_text": item.published_text, "body_length": len(item.body),
+                "first_paragraph": item.body.split("\n", 1)[0][:300],
+                "content_kind": item.content_kind, "profile": profile.model_dump(mode="json"),
+            }
     listing = fetch_html(config.entry_urls[0], config.request.timeout_seconds)
     links, _ = discover_listing(listing, config.entry_urls[0], config)
     if not links:
@@ -162,8 +183,194 @@ def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
             "body_length": len(article["body"]), "first_paragraph": article["body"].split("\n", 1)[0][:300]}
 
 
+def _adaptive_allowed_hosts(base_url: str, config: SourceConfigV2) -> set[str]:
+    hosts = {urlparse(base_url).hostname or "", *config.allowed_hosts}
+    hosts.update(urlparse(entry).hostname or "" for entry in config.entry_urls)
+    return {host.rstrip(".").lower() for host in hosts if host}
+
+
+def _adaptive_fetcher(config: SourceConfigV2, allowed_hosts: set[str]) -> SafeFetcher:
+    limits = FetchLimits(
+        timeout_seconds=config.limits.timeout_seconds,
+        rate_limit_per_minute=config.limits.rate_limit_per_minute,
+    )
+    return SafeFetcher(config.entry_urls[0], allowed_hosts=allowed_hosts, limits=limits)
+
+
+def _persist_learned_profile(db: Session, snapshot: dict[str, Any], config: SourceConfigV2,
+                             profile: CollectionProfile) -> None:
+    source = db.get(Source, snapshot["id"])
+    if not source:
+        return
+    raw_config = config.model_dump(mode="json")
+    raw_config["learned_profile"] = profile.model_dump(mode="json")
+    serialized = json.dumps(raw_config, ensure_ascii=False)
+    if source.config_json == serialized:
+        return
+    source.config_json = serialized
+    version = (db.scalar(select(func.max(SourceVersion.version)).where(
+        SourceVersion.source_id == source.id
+    )) or 0) + 1
+    db.add(SourceVersion(source_id=source.id, version=version, config_json=serialized))
+    snapshot["config"] = raw_config
+
+
+def _probe_model_call(setting: Any):
+    from .llm import _call
+    return lambda messages: _call(setting, messages)
+
+
+def _adaptive_profile(db: Session, task: CollectionTask, snapshot: dict[str, Any],
+                      config: SourceConfigV2, fetcher: SafeFetcher,
+                      allowed_hosts: set[str], force_reprobe: bool = False) -> CollectionProfile:
+    if config.learned_profile and not force_reprobe:
+        return CollectionProfile.model_validate(config.learned_profile)
+    if force_reprobe:
+        config = config.model_copy(update={"learned_profile": None})
+    try:
+        profile = detect_and_validate(fetcher, config.entry_urls[0], sorted(allowed_hosts))
+        _persist_learned_profile(db, snapshot, config, profile)
+        db.add(TaskLog(task_id=task.id, message=(
+            f"确定性探测完成：{profile.content_kind}/{profile.detection_method}，"
+            f"置信度 {profile.confidence:.0%}"
+        )))
+        db.commit()
+        return profile
+    except Exception as deterministic_error:
+        setting = db.get(ModelSetting, 1)
+        if not setting or not setting.enabled or not setting.api_key:
+            raise ValueError(f"确定性探测失败，模型未启用: {deterministic_error}") from deterministic_error
+        profile = ProbeAgent(
+            fetcher, _probe_model_call(setting), config.entry_urls[0], sorted(allowed_hosts),
+        ).run().model_copy(update={"model_name": setting.model_name})
+        _persist_learned_profile(db, snapshot, config, profile)
+        db.add(TaskLog(task_id=task.id, message=(
+            f"模型探测完成：{profile.content_kind}，模型 {setting.model_name}，"
+            f"置信度 {profile.confidence:.0%}"
+        )))
+        db.commit()
+        return profile
+
+
+def collect_adaptive_source(db: Session, task: CollectionTask, snapshot: dict[str, Any],
+                            config: SourceConfigV2) -> tuple[int, int, int, int, int, int]:
+    configured = json.loads(task.keyword_config_json or "[]")
+    groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
+    allowed_hosts = _adaptive_allowed_hosts(snapshot["base_url"], config)
+    saved = deduped = failed = discovered = date_filtered = keyword_filtered = 0
+    with _adaptive_fetcher(config, allowed_hosts) as fetcher:
+        if config.learned_profile:
+            profile = CollectionProfile.model_validate(config.learned_profile)
+            try:
+                if profile.content_kind == "articles":
+                    from .collection.article_executor import ArticleProfileValidator
+                    profile = ArticleProfileValidator(ArticleCollectionExecutor(fetcher)).validate(profile)
+                else:
+                    from .collection.validation import ProfileValidator
+                    profile = ProfileValidator(CollectionExecutor(fetcher)).validate(profile)
+                db.add(TaskLog(task_id=task.id, message=(
+                    f"复用已验证规则，版本 {profile.profile_version}，指纹 {profile.fingerprint[:12]}"
+                )))
+            except Exception as validation_error:
+                db.add(TaskLog(task_id=task.id, level="notice", message=(
+                    f"规则验证失败，启动单次自动修复：{str(validation_error)[:500]}"
+                )))
+                db.commit()
+                profile = _adaptive_profile(db, task, snapshot, config, fetcher, allowed_hosts, force_reprobe=True)
+        else:
+            profile = _adaptive_profile(db, task, snapshot, config, fetcher, allowed_hosts)
+
+        if profile.content_kind == "articles":
+            executor = ArticleCollectionExecutor(fetcher)
+            for result in executor.items(
+                profile, max_pages=config.limits.max_pages, max_items=config.limits.max_items,
+                start_date=task.start_date,
+            ):
+                discovered += 1
+                if not result.item:
+                    failed += 1
+                    db.add(TaskLog(task_id=task.id, level="error", message=f"文章抽取失败 {result.url}: {result.error}"))
+                    continue
+                item = result.item
+                if item.published_at and item.published_at < task.start_date:
+                    date_filtered += 1
+                    continue
+                if task.keyword_filter_enabled:
+                    haystack = f"{item.title}\n{item.body}".casefold()
+                    if isinstance(configured, dict):
+                        matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                    else:
+                        matched = any(keyword in haystack for keyword in groups.get("technical", []))
+                    if not matched or is_low_value_event_promotion(item.title, item.body):
+                        keyword_filtered += 1
+                        continue
+                existing = db.scalar(select(RawArticle).where(
+                    RawArticle.source_id == snapshot["id"], RawArticle.source_item_key == item.source_item_key,
+                ))
+                if existing:
+                    deduped += 1; task.deduplicated_count += 1
+                    continue
+                digest = hashlib.sha256(" ".join(item.body.split()).encode("utf-8")).hexdigest()
+                db.add(RawArticle(
+                    source_id=snapshot["id"], task_id=task.id, canonical_url=item.canonical_url,
+                    source_item_key=item.source_item_key, content_kind="article",
+                    raw_payload_json=json.dumps(item.raw_payload, ensure_ascii=False), title=item.title,
+                    published_at=item.published_at, published_text=item.published_text, body=item.body,
+                    content_hash=digest, status="pending",
+                ))
+                saved += 1; task.fetched_count += 1
+            db.commit()
+            return saved, deduped, failed, discovered, date_filtered, keyword_filtered
+
+        executor = CollectionExecutor(fetcher)
+        for page in executor.pages(
+            profile, max_pages=config.limits.max_pages, max_items=config.limits.max_items,
+            start_date=task.start_date,
+        ):
+            for item in page.items:
+                discovered += 1
+                if item.published_at and item.published_at < task.start_date:
+                    date_filtered += 1
+                    continue
+                if task.keyword_filter_enabled:
+                    haystack = f"{item.title}\n{item.body}".casefold()
+                    if isinstance(configured, dict):
+                        matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                    else:
+                        matched = any(keyword in haystack for keyword in groups.get("technical", []))
+                    if not matched or is_low_value_event_promotion(item.title, item.body):
+                        keyword_filtered += 1
+                        continue
+                existing = db.scalar(select(RawArticle).where(
+                    RawArticle.source_id == snapshot["id"],
+                    RawArticle.source_item_key == item.source_item_key,
+                ))
+                if existing:
+                    deduped += 1
+                    task.deduplicated_count += 1
+                    continue
+                body = item.body
+                digest = hashlib.sha256(" ".join(body.split()).encode("utf-8")).hexdigest()
+                db.add(RawArticle(
+                    source_id=snapshot["id"], task_id=task.id, canonical_url=item.canonical_url,
+                    source_item_key=item.source_item_key, content_kind=item.content_kind,
+                    raw_payload_json=json.dumps(item.fields, ensure_ascii=False), title=item.title,
+                    published_at=item.published_at, published_text=item.published_text, body=body,
+                    content_hash=digest, status="pending",
+                ))
+                saved += 1
+                task.fetched_count += 1
+            db.add(TaskLog(task_id=task.id, message=(
+                f"表格第 {page.number} 页：解析 {len(page.items)} 条，累计保存 {saved} 条"
+            )))
+            db.commit()
+    return saved, deduped, failed, discovered, date_filtered, keyword_filtered
+
+
 def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
     config = validate_source_config(snapshot["base_url"], snapshot.get("config", {}))
+    if isinstance(config, SourceConfigV2):
+        return collect_adaptive_source(db, task, snapshot, config)
     configured = json.loads(task.keyword_config_json or "[]")
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
     seen_urls: set[str] = set()
