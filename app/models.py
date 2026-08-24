@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date, datetime, timezone
 
-from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, String, Text, UniqueConstraint
 from sqlalchemy.orm import Mapped, mapped_column
 
 from .database import Base
@@ -10,6 +10,11 @@ from .database import Base
 
 def utc_now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def default_source_item_key(context) -> str:
+    """Keep direct/legacy article inserts compatible with URL-based identity."""
+    return str(context.get_current_parameters().get("canonical_url") or "")
 
 
 class Source(Base):
@@ -75,10 +80,14 @@ class TaskLog(Base):
 
 class RawArticle(Base):
     __tablename__ = "raw_articles"
+    __table_args__ = (UniqueConstraint("source_id", "source_item_key", name="uq_raw_articles_source_item_key"),)
     id: Mapped[int] = mapped_column(primary_key=True)
     source_id: Mapped[int] = mapped_column(ForeignKey("sources.id"), index=True)
     task_id: Mapped[int | None] = mapped_column(ForeignKey("collection_tasks.id"), index=True)
-    canonical_url: Mapped[str] = mapped_column(String(1000), unique=True)
+    canonical_url: Mapped[str] = mapped_column(String(1000))
+    source_item_key: Mapped[str] = mapped_column(String(1000), default=default_source_item_key)
+    content_kind: Mapped[str] = mapped_column(String(30), default="article")
+    raw_payload_json: Mapped[str] = mapped_column(Text, default="{}")
     title: Mapped[str] = mapped_column(String(500))
     published_at: Mapped[date | None] = mapped_column(Date)
     published_text: Mapped[str | None] = mapped_column(String(200))

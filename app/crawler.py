@@ -206,12 +206,18 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
                             keyword_filtered += 1
                             continue
                     digest = hashlib.sha256(" ".join(article["body"].split()).encode()).hexdigest()
-                    existing = db.scalar(select(RawArticle).where((RawArticle.canonical_url == article["canonical_url"]) | (RawArticle.content_hash == digest)))
+                    source_item_key = article["canonical_url"]
+                    existing = db.scalar(select(RawArticle).where(
+                        ((RawArticle.source_id == snapshot["id"]) & (RawArticle.source_item_key == source_item_key))
+                        | (RawArticle.content_hash == digest)
+                    ))
                     if existing:
                         deduped += 1
                         task.deduplicated_count += 1
                         continue
-                    db.add(RawArticle(source_id=snapshot["id"], task_id=task.id, content_hash=digest, status="pending", **article))
+                    db.add(RawArticle(source_id=snapshot["id"], task_id=task.id, source_item_key=source_item_key,
+                                      content_kind="article", raw_payload_json="{}", content_hash=digest,
+                                      status="pending", **article))
                     saved += 1
                     task.fetched_count += 1
                 except Exception as exc:

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -26,6 +26,7 @@ class PaginationConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
+    version: Literal[1] = 1
     entry_urls: list[str] = Field(min_length=1, max_length=20)
     article_url_pattern: str
     selectors: Selectors
@@ -49,13 +50,51 @@ class SourceConfig(BaseModel):
         return self
 
 
-def validate_source_config(base_url: str, config: dict[str, Any]) -> SourceConfig:
-    parsed = SourceConfig.model_validate(config)
-    allowed_host = (urlparse(base_url).hostname or "").lower()
+class SourceLimits(BaseModel):
+    rate_limit_per_minute: int = Field(default=12, ge=1, le=120)
+    timeout_seconds: float = Field(default=20, ge=3, le=60)
+    max_pages: int = Field(default=100, ge=1, le=1000)
+    max_items: int = Field(default=5000, ge=1, le=100_000)
+
+
+class SourceConfigV2(BaseModel):
+    version: Literal[2]
+    entry_urls: list[str] = Field(min_length=1, max_length=20)
+    mode: Literal["auto", "profile"] = "auto"
+    allowed_hosts: list[str] = Field(default_factory=list, max_length=20)
+    content_hint: str = Field(default="", max_length=1000)
+    limits: SourceLimits = Field(default_factory=SourceLimits)
+    learned_profile: dict[str, Any] | None = None
+
+    @field_validator("allowed_hosts")
+    @classmethod
+    def normalize_hosts(cls, value: list[str]) -> list[str]:
+        hosts: list[str] = []
+        for item in value:
+            host = item.strip().rstrip(".").lower()
+            if not host or "://" in host or "/" in host or "@" in host:
+                raise ValueError("允许主机必须是纯域名")
+            hosts.append(host)
+        return list(dict.fromkeys(hosts))
+
+
+def validate_source_config(base_url: str, config: dict[str, Any]) -> SourceConfig | SourceConfigV2:
+    version = config.get("version", 1) if isinstance(config, dict) else None
+    if version not in {1, 2}:
+        raise ValueError("仅支持来源配置版本 1 或 2")
+    parsed = SourceConfigV2.model_validate(config) if version == 2 else SourceConfig.model_validate(config)
+    base = urlparse(base_url)
+    allowed_host = (base.hostname or "").rstrip(".").lower()
     if not allowed_host:
         raise ValueError("站点地址缺少有效域名")
+    if base.scheme not in {"http", "https"} or base.username or base.password:
+        raise ValueError("站点地址必须是不含用户名密码的 http(s) URL")
+    allowed_hosts = {allowed_host}
+    if isinstance(parsed, SourceConfigV2):
+        allowed_hosts.update(parsed.allowed_hosts)
     for entry in parsed.entry_urls:
         url = urlparse(entry)
-        if url.scheme not in {"http", "https"} or (url.hostname or "").lower() != allowed_host:
-            raise ValueError("入口地址必须使用 http(s) 且与站点地址同域")
+        entry_host = (url.hostname or "").rstrip(".").lower()
+        if url.scheme not in {"http", "https"} or url.username or url.password or entry_host not in allowed_hosts:
+            raise ValueError("入口地址必须使用不含用户名密码的 http(s) URL，且主机已获允许")
     return parsed

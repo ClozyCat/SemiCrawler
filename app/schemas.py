@@ -158,6 +158,9 @@ class ArticleRead(BaseModel):
     source_name: str
     task_id: int | None
     canonical_url: str
+    source_item_key: str
+    content_kind: str
+    raw_payload: dict[str, Any]
     title: str
     published_at: date | None
     published_text: str | None

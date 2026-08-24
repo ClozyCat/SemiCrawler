@@ -289,8 +289,10 @@ def delete_records(payload: DeleteIds, db: Session = Depends(get_db)):
 def article_read(article: RawArticle, source_name: str, record_count: int) -> ArticleRead:
     return ArticleRead.model_validate({
         **{key: getattr(article, key) for key in (
-            "id", "source_id", "task_id", "canonical_url", "title", "published_at", "published_text",
+            "id", "source_id", "task_id", "canonical_url", "source_item_key", "content_kind",
+            "title", "published_at", "published_text",
             "body", "status", "error_message", "model_name", "collected_at")},
+        "raw_payload": json.loads(article.raw_payload_json or "{}"),
         "source_name": source_name, "record_count": record_count,
     })
 
