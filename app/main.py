@@ -24,7 +24,7 @@ from .schemas import (AnalyticsOverview, AppMeta, ArticleList, ArticleRead, LogR
                       RecordList, RecordRead, RecordUpdate, SourceCreate, SourceRead, SourceTest, SourceUpdate,
                       StructureResult, TaskCreate, TaskRead, DeleteIds)
 from .seed import seed_default_sources
-from .source_config import validate_source_config
+from .source_config import source_type, validate_source_config
 
 
 @asynccontextmanager
@@ -47,10 +47,12 @@ app.add_middleware(
 
 
 def source_read(source: Source) -> SourceRead:
+    config = json.loads(source.config_json)
     return SourceRead.model_validate({
         "id": source.id, "name": source.name, "base_url": source.base_url,
         "enabled": source.enabled, "builtin": source.builtin,
-        "config": json.loads(source.config_json), "created_at": source.created_at, "updated_at": source.updated_at,
+        "source_type": source_type(config), "config": config,
+        "created_at": source.created_at, "updated_at": source.updated_at,
     })
 
 
@@ -140,6 +142,7 @@ def create_task(payload: TaskCreate, background_tasks: BackgroundTasks, db: Sess
     if len(sources) != len(payload.source_ids):
         raise HTTPException(400, "部分来源不存在或未启用")
     snapshots = [{"id": item.id, "name": item.name, "base_url": item.base_url,
+                  "source_type": source_type(json.loads(item.config_json)),
                   "config": json.loads(item.config_json)} for item in sources]
     now = utc_now()
     task = CollectionTask(

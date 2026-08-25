@@ -6,7 +6,7 @@ from datetime import date
 from typing import Any
 
 import httpx
-from pydantic import BaseModel, Field, ValidationError, field_validator
+from pydantic import BaseModel, Field, HttpUrl, ValidationError, field_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -60,6 +60,19 @@ class Extraction(BaseModel):
     records: list[ExtractedRecord]
 
 
+class WebSearchItem(BaseModel):
+    title: str = Field(min_length=1, max_length=500)
+    published_at: date | None = None
+    source_name: str = Field(min_length=1, max_length=120)
+    original_url: HttpUrl
+    body: str = Field(min_length=1)
+    record: ExtractedRecord
+
+
+class WebSearchExtraction(BaseModel):
+    items: list[WebSearchItem]
+
+
 class ModelOutputError(ValueError):
     pass
 
@@ -69,6 +82,11 @@ SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不�
 “开发区/院校”只能填写项目或企业明确归属的具体地方、园区、学校或科研机构，例如省、市、区县、开发区、经开区、高新区、产业园、生态城、大学、学院、研究院、实验室。如果同一篇资料同时出现开发区/园区（包括经开区、高新区、产业园、生态城等）和院校/科研机构，该字段只填开发区/园区，不填院校。字段值必须是名词或专有名词短语，不得填写句子、动作或描述性短语；例如“天津芯擎科技技术主要来源于清华大学”不是合法字段值。企业、集团及其简称不是开发区/院校，必须填写到“企业名称”，严禁将公司名填入“开发区/院校”。
 中国大陆的具体地址不能直接写入地域：地域填对应的“中国大陆-大区”，具体地点填入“开发区/院校”。原文有明确的落户、位于、入驻、选址等归属关系时必须提取对应地点；例如“成都成华经开区”应填入开发区/院校并将地域填为“中国大陆-西南”，“北京经济技术开发区（亦庄）”应完整保留官方名称和括号内别名并将地域填为“中国大陆-华北”。没有明确具体地点时该字段为空。
 每个非空字段给出原文证据和 0-1 置信度。金额保留原文，并拆分 value/currency/unit/note。只输出 JSON。""".format(regions="、".join(REGION_OPTIONS))
+
+WEB_SEARCH_SYSTEM_PROMPT = """你是半导体产业资讯检索与事实抽取器。服务端已为本次请求强制启用联网搜索。直接使用服务端注入的搜索结果，不要判断、讨论或输出是否存在联网工具，也不要声称自己无法联网。仅依据检索到的网页形成结果，不得使用无法核验的记忆或推测。
+每个 items 元素对应一篇独立网页和一条结构化记录。original_url 必须是该事实的具体原始网页 URL，不得填写搜索页、网站首页或虚构 URL；source_name 填网页发布机构；body 是忠实、足以支持所有字段的中文事实摘要。相同事件只保留最权威、信息最完整的一个来源。
+只保留发布日期不早于 start_date 且与 query 相关的真实产业进展，排除活动预告、展会宣传和无具体事实的内容。优先遵守 source_hint；提示中包含域名或 URL 时，应优先或限定检索这些网站。
+每篇网页只能产出一条 record。资讯类型按 allowed_info_types 的顺序选择最高优先级的一种，其余类型的事实合并到 details。地域必须从 allowed_regions 中选择；每个非空字段给出网页中的证据和 0-1 置信度。金额保留原文，并拆分 value/currency/unit/note。找不到合格结果时 items 为空。只输出符合 schema 的 JSON。"""
 
 
 _MAINLAND_REGION_KEYWORDS = {
@@ -200,14 +218,45 @@ def _messages(article: RawArticle, error: str | None = None) -> list[dict[str, s
     return [{"role": "system", "content": SYSTEM_PROMPT}, {"role": "user", "content": json.dumps(request, ensure_ascii=False)}]
 
 
-def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
+def _print_llm_debug(label: str, value: Any) -> None:
+    if not isinstance(value, str):
+        value = json.dumps(value, ensure_ascii=False, indent=2, default=str)
+    print(f"\n{'=' * 24} {label} {'=' * 24}", flush=True)
+    print(value, flush=True)
+    print("=" * (50 + len(label)), flush=True)
+
+
+def _call(setting: ModelSetting, messages: list[dict[str, str]], *, enable_search: bool = False) -> str:
     url = setting.base_url.rstrip("/") + "/chat/completions"
+    payload: dict[str, Any] = {
+        "model": setting.model_name,
+        "messages": messages,
+        "temperature": 0,
+        "response_format": {"type": "json_object"},
+        "max_tokens": 8192 if enable_search else 4096,
+    }
+    if enable_search:
+        # DashScope's OpenAI-compatible API accepts extra_body fields at the
+        # top level of the JSON request.
+        payload["enable_search"] = True
+        payload["search_options"] = {
+            "forced_search": True,
+            "search_strategy": "max",
+        }
+    _print_llm_debug("LLM REQUEST", {"url": url, "body": payload})
     response = httpx.post(url, headers={"Authorization": f"Bearer {setting.api_key}"},
-                          json={"model": setting.model_name, "messages": messages, "temperature": 0,
-                                "response_format": {"type": "json_object"}, "max_tokens": 4096}, timeout=60)
+                          json=payload, timeout=120 if enable_search else 60)
+    try:
+        response_data = response.json()
+    except (ValueError, TypeError):
+        response_data = getattr(response, "text", "<无法读取响应内容>")
+    _print_llm_debug("LLM RESPONSE", {
+        "status_code": getattr(response, "status_code", "unknown"),
+        "body": response_data,
+    })
     response.raise_for_status()
     try:
-        choice = response.json()["choices"][0]
+        choice = response_data["choices"][0]
         content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ModelOutputError("模型接口响应中缺少消息内容") from exc
@@ -215,16 +264,60 @@ def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
         finish_reason = choice.get("finish_reason")
         suffix = "（输出达到长度上限）" if finish_reason == "length" else ""
         raise ModelOutputError(f"模型返回了空内容{suffix}")
+    _print_llm_debug("LLM FINAL CONTENT", content)
     return content
 
 
 def _parse(raw: str) -> Extraction:
+    return Extraction.model_validate_json(_json_text(raw))
+
+
+def _json_text(raw: str) -> str:
     text = raw.strip()
     if not text:
         raise ModelOutputError("模型返回了空内容")
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
-    return Extraction.model_validate_json(text)
+    return text
+
+
+def search_web(
+    setting: ModelSetting,
+    *,
+    query: str,
+    source_hint: str,
+    start_date: date,
+    max_results: int,
+) -> WebSearchExtraction:
+    request = {
+        "query": query,
+        "source_hint": source_hint or "不限网站，优先原始发布机构和权威来源",
+        "start_date": start_date.isoformat(),
+        "max_results": max_results,
+        "allowed_info_types": INFO_TYPES,
+        "allowed_regions": REGION_OPTIONS,
+        "schema": WebSearchExtraction.model_json_schema(),
+    }
+    messages = [
+        {"role": "system", "content": WEB_SEARCH_SYSTEM_PROMPT},
+        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+    ]
+    public_error = "联网检索结果无法通过校验"
+    retry_error = ""
+    for _ in range(2):
+        attempt_messages = messages
+        if retry_error:
+            attempt_messages = [*messages, {"role": "user", "content": (
+                f"上一份输出无效：{retry_error[:1000]}。请重新检索并完整输出合法 JSON。"
+            )}]
+        try:
+            raw = _call(setting, attempt_messages, enable_search=True)
+            result = WebSearchExtraction.model_validate_json(_json_text(raw))
+            return WebSearchExtraction(items=result.items[:max_results])
+        except (ModelOutputError, ValidationError, json.JSONDecodeError, httpx.HTTPError) as exc:
+            retry_error = str(exc)
+            public_error = _public_model_error(exc)
+    raise ModelOutputError(f"联网检索失败：{public_error}（已自动重试）")
 
 
 def _public_model_error(exc: Exception) -> str:
@@ -265,6 +358,37 @@ def _one_record_per_article(records: list[ExtractedRecord]) -> list[ExtractedRec
     return [primary]
 
 
+def persist_extracted_record(
+    db: Session,
+    article: RawArticle,
+    item: ExtractedRecord,
+    *,
+    source_name: str | None = None,
+) -> StructuredRecord:
+    amount = item.investment_amount
+    region, organization = _normalize_region_and_organization(
+        item.region, item.organization, f"{article.title}\n{article.body}"
+    )
+    if source_name is None:
+        source_name = db.scalar(select(Source.name).where(Source.id == article.source_id)) or ""
+    low_confidence = any(score < .6 for score in item.confidence.values())
+    record = StructuredRecord(
+        article_id=article.id, task_id=article.task_id, region=region,
+        organization=organization, company_name=item.company_name,
+        event_date=item.event_date or article.published_at,
+        info_type=item.info_type, investment_amount=amount.original or "未披露",
+        project_name=item.project_name, source_name=source_name,
+        original_url=article.canonical_url, details=item.details,
+        evidence_json=json.dumps(item.evidence, ensure_ascii=False),
+        confidence_json=json.dumps(item.confidence, ensure_ascii=False),
+        status="review_required" if low_confidence else "completed",
+        amount_value=amount.value, amount_currency=amount.currency,
+        amount_unit=amount.unit, amount_note=amount.note,
+    )
+    db.add(record)
+    return record
+
+
 def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -> int:
     raw = ""
     retry_error = None
@@ -282,20 +406,8 @@ def structure_article(db: Session, article: RawArticle, setting: ModelSetting) -
         return 0
 
     records = _one_record_per_article(result.records)
-    source_name = db.scalar(select(Source.name).where(Source.id == article.source_id)) or ""
-    low_confidence = any(score < .6 for record in records for score in record.confidence.values())
     for item in records:
-        amount = item.investment_amount
-        region, organization = _normalize_region_and_organization(
-            item.region, item.organization, f"{article.title}\n{article.body}"
-        )
-        db.add(StructuredRecord(article_id=article.id, task_id=article.task_id, region=region,
-            organization=organization, company_name=item.company_name, event_date=item.event_date or article.published_at,
-            info_type=item.info_type, investment_amount=amount.original or "未披露", project_name=item.project_name,
-            source_name=source_name, original_url=article.canonical_url, details=item.details,
-            evidence_json=json.dumps(item.evidence, ensure_ascii=False), confidence_json=json.dumps(item.confidence, ensure_ascii=False),
-            status="review_required" if low_confidence else "completed", amount_value=amount.value,
-            amount_currency=amount.currency, amount_unit=amount.unit, amount_note=amount.note))
+        persist_extracted_record(db, article, item)
     article.status = "completed"; article.error_message = None; article.llm_output = raw; article.model_name = setting.model_name
     return len(records)
 

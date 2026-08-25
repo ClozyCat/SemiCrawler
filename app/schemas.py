@@ -51,6 +51,7 @@ class SourceRead(BaseModel):
     base_url: str
     enabled: bool
     builtin: bool
+    source_type: str
     config: dict[str, Any]
     created_at: datetime
     updated_at: datetime

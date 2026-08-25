@@ -36,8 +36,8 @@ class SourceVersion(Base):
 class ModelSetting(Base):
     __tablename__ = "model_settings"
     id: Mapped[int] = mapped_column(primary_key=True, default=1)
-    base_url: Mapped[str] = mapped_column(String(500), default="https://api.deepseek.com")
-    model_name: Mapped[str] = mapped_column(String(200), default="deepseek-v4-flash")
+    base_url: Mapped[str] = mapped_column(String(500), default="https://dashscope.aliyuncs.com/compatible-mode/v1")
+    model_name: Mapped[str] = mapped_column(String(200), default="qwen3-max")
     api_key: Mapped[str] = mapped_column(Text, default="")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     keyword_config_json: Mapped[str] = mapped_column(Text, default="[]")

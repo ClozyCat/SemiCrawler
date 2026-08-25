@@ -1,6 +1,6 @@
 # 芯闻采集台
 
-实施计划的四个阶段均已完成：React/Vite 工作台、FastAPI/SQLite 持久化、两站真实采集、OpenAI 兼容 LLM 结构化、证据与置信度审核、JSON 来源试抓取/版本化，以及默认和完整审计 CSV/XLSX 导出。
+实施计划的四个阶段均已完成：React/Vite 工作台、FastAPI/SQLite 持久化、两站真实采集、Qwen 联网检索、OpenAI 兼容 LLM 结构化、证据与置信度审核、JSON 来源试抓取/版本化，以及默认和完整审计 CSV/XLSX 导出。
 
 ## 本地运行
 
@@ -13,7 +13,9 @@ npm run dev
 
 打开 `http://127.0.0.1:5173`。SQLite 数据默认写入 `data/semi_crawler.db`，可用 `SEMICRAWLER_DATA_DIR` 或 `SEMICRAWLER_DATABASE_URL` 调整。
 
-在“模型与导出”页面填写兼容 API 地址、模型名和 API Key 后启用自动结构化。密钥仅由后端保存，读取接口只返回掩码。未启用模型时，文章会保留为待结构化原文，不会丢失。
+在“API配置”页面填写兼容 API 地址、模型名和 API Key 后启用自动结构化。密钥仅由后端保存，读取接口只返回掩码。未启用模型时，普通网站文章会保留为待结构化原文，不会丢失。
+
+联网信息源使用 Qwen 的 `enable_search` 能力。API 地址配置为 `https://dashscope.aliyuncs.com/compatible-mode/v1`，模型可使用 `qwen3-max`。添加信息源时选择“联网搜索”，只需填写自然语言的检索主题与关键词总结，以及可选的网址来源提示；任务会直接保存带原文网址的摘要和结构化记录。
 
 采集器在每次请求前遵守目标站点 `robots.txt`，使用可识别的 `SemiCrawler/1.0` User-Agent，并按来源配置限速。工具仅用于公开页面和本地事实审核；导出始终保留来源归属及原文链接，使用者仍需遵守站点条款和版权要求。
 

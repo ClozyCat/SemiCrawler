@@ -2,7 +2,8 @@ import json
 from datetime import date
 
 from app.database import SessionLocal
-from app.llm import _normalize_region_and_organization, structure_article
+from app.llm import _call, _normalize_region_and_organization, structure_article
+from app.models import ModelSetting, RawArticle, Source
 
 
 def test_region_is_normalized_and_fine_grained_location_is_preserved():
@@ -87,7 +88,42 @@ def test_luowei_extracts_official_zone_name_and_alias():
     )
     assert region == "中国大陆-华北"
     assert organization == "北京经济技术开发区（亦庄）"
-from app.models import ModelSetting, RawArticle, Source
+
+
+def test_qwen_web_search_uses_enable_search_in_compatible_request(monkeypatch, capsys):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"items": []}'}, "finish_reason": "stop"}]}
+
+    def fake_post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr("app.llm.httpx.post", fake_post)
+    setting = ModelSetting(
+        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
+        model_name="qwen3-max",
+        api_key="test-key",
+    )
+    assert _call(setting, [{"role": "user", "content": "test"}], enable_search=True) == '{"items": []}'
+    assert captured["url"].endswith("/compatible-mode/v1/chat/completions")
+    assert captured["json"]["enable_search"] is True
+    assert captured["json"]["search_options"] == {
+        "forced_search": True,
+        "search_strategy": "max",
+    }
+    assert captured["json"]["model"] == "qwen3-max"
+    debug_output = capsys.readouterr().out
+    assert "LLM REQUEST" in debug_output
+    assert "LLM RESPONSE" in debug_output
+    assert "LLM FINAL CONTENT" in debug_output
+    assert "qwen3-max" in debug_output
+    assert "test-key" not in debug_output
 
 
 def test_llm_retries_invalid_output_and_marks_low_confidence(monkeypatch):

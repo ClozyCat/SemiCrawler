@@ -4,7 +4,7 @@ import {
   Activity, BookOpen, CalendarDays, CheckCircle2, ChevronDown,
   Database, Download, ExternalLink, FileJson, FileSpreadsheet, History,
   LayoutDashboard, ListFilter, LoaderCircle, Menu, Plus, RefreshCw, Search,
-  Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload, Network, Maximize2, Minimize2,
+  Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload, Network, Maximize2, Minimize2, Globe2, Rss,
 } from 'lucide-react'
 import { api } from './api'
 import * as XLSX from 'xlsx'
@@ -19,13 +19,14 @@ const NAV = [
   { id: 'settings', label: 'API配置', icon: Settings },
 ]
 const EMPTY_FORM = {
-  name: '', base_url: '', enabled: true,
+  mode: 'crawler', name: '', base_url: '', enabled: true, search_query: '', source_hint: '',
   config: JSON.stringify({
     entry_urls: ['https://example.com/news'], article_url_pattern: '/news/',
     selectors: { list_links: 'article a', title: 'h1', date: '.publish-date', content: '.content' },
     request: { rate_limit_per_minute: 20, timeout_seconds: 20 },
   }, null, 2),
 }
+const DASHSCOPE_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 
 function formatTime(value) {
   if (!value) return '—'
@@ -56,7 +57,13 @@ function Modal({ title, children, onClose, wide = false }) {
 }
 
 function SourceForm({ source, onClose, onSaved }) {
-  const [form, setForm] = useState(source ? { ...source, config: JSON.stringify(source.config, null, 2) } : EMPTY_FORM)
+  const [form, setForm] = useState(() => source ? {
+    ...source,
+    mode: source.source_type || (source.config?.type === 'web_search' ? 'web_search' : 'crawler'),
+    search_query: source.config?.query || '',
+    source_hint: source.config?.source_hint || '',
+    config: JSON.stringify(source.config, null, 2),
+  } : EMPTY_FORM)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
   const [testing, setTesting] = useState(false)
@@ -64,7 +71,14 @@ function SourceForm({ source, onClose, onSaved }) {
   const submit = async (event) => {
     event.preventDefault(); setError(''); setSaving(true)
     try {
-      const payload = { name: form.name.trim(), base_url: form.base_url.trim(), enabled: form.enabled, config: JSON.parse(form.config) }
+      const isSearch = form.mode === 'web_search'
+      const query = form.search_query.trim()
+      const payload = isSearch ? {
+        name: `联网搜索：${query.replace(/\s+/g, ' ').slice(0, 42)}`,
+        base_url: DASHSCOPE_BASE_URL,
+        enabled: form.enabled,
+        config: { type: 'web_search', query, source_hint: form.source_hint.trim(), max_results: 10 },
+      } : { name: form.name.trim(), base_url: form.base_url.trim(), enabled: form.enabled, config: JSON.parse(form.config) }
       const saved = source ? await api.updateSource(source.id, payload) : await api.addSource(payload)
       onSaved(saved); onClose()
     } catch (err) { setError(err instanceof SyntaxError ? '配置不是有效的 JSON' : err.message) }
@@ -81,14 +95,32 @@ function SourceForm({ source, onClose, onSaved }) {
     catch (err) { setError(err instanceof SyntaxError ? '配置不是有效的 JSON' : err.message) }
     finally { setTesting(false) }
   }
+  const chooseMode = (mode) => {
+    setError(''); setPreview(null)
+    setForm((old) => ({
+      ...old,
+      mode,
+      ...(mode === 'crawler' && old.mode === 'web_search' ? { name: '', base_url: '', config: EMPTY_FORM.config } : {}),
+    }))
+  }
   return <Modal title={source ? '编辑信息源' : '添加信息源'} onClose={onClose} wide>
     <form onSubmit={submit}>
       <div className="modal-body form-grid">
-        <label className="field"><span>来源名称</span><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：某开发区官网" /></label>
-        <label className="field"><span>站点地址</span><input required type="url" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://example.com" /></label>
-        <label className="field full"><span>JSON 来源配置</span><textarea rows="14" value={form.config} onChange={(e) => setForm({ ...form, config: e.target.value })} spellCheck="false" /></label>
-        <div className="file-row full"><label className="secondary button-file"><FileJson />上传 JSON<input type="file" accept=".json,application/json" onChange={readFile} /></label><button type="button" className="secondary" onClick={test} disabled={testing}>{testing ? <LoaderCircle className="spin" /> : <FlaskConical />}试抓取</button><span>保存前会校验域名、正则与选择器。</span></div>
-        {preview && <div className="preview full"><b>{preview.title}</b><span>{preview.published_at || preview.published_text} · 正文 {preview.body_length} 字</span><p>{preview.first_paragraph}</p><a href={preview.url} target="_blank" rel="noreferrer">打开样文<ExternalLink /></a></div>}
+        <div className="source-mode full" role="group" aria-label="信息源形式">
+          <button type="button" className={form.mode === 'crawler' ? 'active' : ''} onClick={() => chooseMode('crawler')}><Rss />网站采集</button>
+          <button type="button" className={form.mode === 'web_search' ? 'active' : ''} onClick={() => chooseMode('web_search')}><Globe2 />联网搜索</button>
+        </div>
+        {form.mode === 'crawler' ? <>
+          <label className="field"><span>来源名称</span><input required value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：某开发区官网" /></label>
+          <label className="field"><span>站点地址</span><input required type="url" value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} placeholder="https://example.com" /></label>
+          <label className="field full"><span>JSON 来源配置</span><textarea rows="14" value={form.config} onChange={(e) => setForm({ ...form, config: e.target.value })} spellCheck="false" /></label>
+          <div className="file-row full"><label className="secondary button-file"><FileJson />上传 JSON<input type="file" accept=".json,application/json" onChange={readFile} /></label><button type="button" className="secondary" onClick={test} disabled={testing}>{testing ? <LoaderCircle className="spin" /> : <FlaskConical />}试抓取</button><span>保存前会校验域名、正则与选择器。</span></div>
+          {preview && <div className="preview full"><b>{preview.title}</b><span>{preview.published_at || preview.published_text} · 正文 {preview.body_length} 字</span><p>{preview.first_paragraph}</p><a href={preview.url} target="_blank" rel="noreferrer">打开样文<ExternalLink /></a></div>}
+        </> : <div className="search-source-fields full">
+          <label className="field"><span>检索主题与关键词总结</span><textarea required rows="5" value={form.search_query} onChange={(e) => setForm({ ...form, search_query: e.target.value })} placeholder="例如：检索中国大陆先进封装、Chiplet 项目的签约、开工和扩产动态，关注投资金额、项目地点与产能。" /></label>
+          <label className="field"><span>网址来源提示</span><textarea rows="4" value={form.source_hint} onChange={(e) => setForm({ ...form, source_hint: e.target.value })} placeholder="例如：优先政府、开发区与企业官网；重点检索 gov.cn、公司新闻中心，也可粘贴具体网址。" /></label>
+          <p className="source-mode-note"><Globe2 />任务执行时由已配置的 Qwen 模型联网检索，并直接生成可追溯的原始摘要与结构化记录。</p>
+        </div>}
         {error && <p className="form-error full">{error}</p>}
       </div>
       <footer className="modal-foot"><button type="button" className="secondary" onClick={onClose}>取消</button><button className="primary" disabled={saving}>{saving && <LoaderCircle className="spin" />}{source ? '保存修改' : '保存来源'}</button></footer>
@@ -183,7 +215,7 @@ function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, on
     <div className="title-row"><div><span className="eyebrow">本地采集工作台</span><h1>半导体资讯采集</h1><p>选择来源与日期，创建可追溯、可持久化的采集任务。</p></div><button className="primary" onClick={onAddSource}><Plus />添加信息源</button></div>
     <Metrics sources={sources} tasks={tasks} records={records} articles={articles} />
     <div className="workspace-grid"><section className="panel source-panel"><div className="panel-head"><div><h2>创建采集任务</h2><p>来源配置将在创建时生成快照</p></div><span className="selected-count">已选 {selected.length}</span></div>
-      <div className="source-list">{sources.map((source) => <label className={`source-row ${!source.enabled ? 'disabled' : ''}`} key={source.id}><input type="checkbox" checked={selected.includes(source.id)} disabled={!source.enabled} onChange={() => toggle(source.id)} /><span className="source-checkmark"><CheckCircle2 /></span><span className="source-copy"><b>{source.name}</b><small>{source.base_url}</small></span><span className={`source-kind ${source.builtin ? '' : 'custom'}`}>{source.builtin ? '内置' : '自定义'}</span></label>)}</div>
+      <div className="source-list">{sources.map((source) => <label className={`source-row ${!source.enabled ? 'disabled' : ''}`} key={source.id}><input type="checkbox" checked={selected.includes(source.id)} disabled={!source.enabled} onChange={() => toggle(source.id)} /><span className="source-checkmark"><CheckCircle2 /></span><span className="source-copy"><b>{source.name}</b><small>{source.source_type === 'web_search' ? source.config.query : source.base_url}</small></span><span className={`source-kind ${source.source_type === 'web_search' ? 'web-search' : source.builtin ? '' : 'custom'}`}>{source.source_type === 'web_search' ? '联网' : source.builtin ? '内置' : '自定义'}</span></label>)}</div>
       <div className="task-options"><label className="check-field"><input type="checkbox" checked={keywordFilter} onChange={(e) => setKeywordFilter(e.target.checked)} /><span>启用关键词过滤</span></label><label className="check-field"><input type="checkbox" checked={autoStructure} onChange={(e) => setAutoStructure(e.target.checked)} /><span>自动 AI 结构化归档</span></label></div>
       <div className="runbar"><label><CalendarDays /><span>资讯起始日期</span><input aria-label="资讯起始日期" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><button className="primary" disabled={!selected.length || creating || (keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length))} onClick={() => onCreateTask(selected, startDate, keywordFilter, autoStructure)}>{creating ? <LoaderCircle className="spin" /> : <Activity />}{creating ? '正在创建' : '创建任务'}</button></div>
       {keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length) && <p className="form-error task-hint">请先在“关键词配置”中添加关键词。</p>}
@@ -308,8 +340,8 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
 }
 
 function SourcesView({ sources, onAdd, onEdit, onToggle }) {
-  return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>维护可持久化的 JSON 适配配置与启用状态。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
-    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b><a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a><span>{source.builtin ? '内置来源' : '自定义'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
+  return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>维护网站采集配置与 Qwen 联网检索主题。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
+    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址 / 检索主题</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b>{source.source_type === 'web_search' ? <span className="source-query" title={source.config.query}>{source.config.query}</span> : <a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a>}<span>{source.source_type === 'web_search' ? 'Qwen 联网搜索' : source.builtin ? '内置网站' : '自定义网站'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
   </>
 }
 
@@ -378,12 +410,12 @@ function RecordDetailModal({ id, meta, onClose, onSaved }) {
 }
 
 function SettingsView() {
-  const [form, setForm] = useState({ base_url: 'https://api.deepseek.com', model_name: 'deepseek-v4-flash', api_key: '', enabled: false })
+  const [form, setForm] = useState({ base_url: DASHSCOPE_BASE_URL, model_name: 'qwen3-max', api_key: '', enabled: false })
   const [saved, setSaved] = useState(null)
   const [error, setError] = useState('')
   useEffect(() => { api.modelSetting().then((data) => { setSaved(data); setForm((old) => ({ ...old, ...data, api_key: '' })) }).catch((err) => setError(err.message)) }, [])
   const submit = async (event) => { event.preventDefault(); setError(''); try { const result = await api.saveModelSetting(form); setSaved(result); setForm({ ...form, api_key: '' }) } catch (err) { setError(err.message) } }
-  return <><div className="title-row"><div><span className="eyebrow">服务端配置</span><h1>API配置</h1><p>配置 OpenAI 兼容模型与自动结构化服务。</p></div></div><div className="settings-grid"><section className="panel model-form"><SlidersHorizontal /><form onSubmit={submit}><h2>结构化模型</h2><label className="field"><span>API 地址</span><input type="url" required value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} /></label><label className="field"><span>模型名称</span><input required value={form.model_name} onChange={(e) => setForm({ ...form, model_name: e.target.value })} /></label><label className="field"><span>API Key {saved?.has_api_key && <small>已保存 {saved.api_key_hint}</small>}</span><input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder={saved?.has_api_key ? '留空以保留现有密钥' : 'sk-...'} /></label><label className="check-field"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /><span>启用自动结构化（仅任务流程）</span></label><p className="field-note">关闭后，采集任务保留待结构化原文；数据归档仍可使用已配置的 API 手动结构化。</p>{error && <p className="form-error">{error}</p>}<button className="primary"><Save />保存模型设置</button></form></section></div></>
+  return <><div className="title-row"><div><span className="eyebrow">服务端配置</span><h1>API配置</h1><p>配置 Qwen / OpenAI 兼容模型、联网检索与自动结构化服务。</p></div></div><div className="settings-grid"><section className="panel model-form"><SlidersHorizontal /><form onSubmit={submit}><h2>模型服务</h2><label className="field"><span>API 地址</span><input type="url" required value={form.base_url} onChange={(e) => setForm({ ...form, base_url: e.target.value })} /></label><label className="field"><span>模型名称</span><input required value={form.model_name} onChange={(e) => setForm({ ...form, model_name: e.target.value })} /></label><label className="field"><span>API Key {saved?.has_api_key && <small>已保存 {saved.api_key_hint}</small>}</span><input type="password" value={form.api_key} onChange={(e) => setForm({ ...form, api_key: e.target.value })} placeholder={saved?.has_api_key ? '留空以保留现有密钥' : 'sk-...'} /></label><label className="check-field"><input type="checkbox" checked={form.enabled} onChange={(e) => setForm({ ...form, enabled: e.target.checked })} /><span>启用网站原文自动结构化</span></label><p className="field-note">联网信息源始终调用这里保存的 Qwen 模型，并通过 enable_search 检索；上方开关只控制普通网站原文是否自动结构化。</p>{error && <p className="form-error">{error}</p>}<button className="primary"><Save />保存模型设置</button></form></section></div></>
 }
 
 export default function App() {

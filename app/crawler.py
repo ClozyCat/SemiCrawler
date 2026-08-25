@@ -15,9 +15,9 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .llm import structure_pending
-from .models import CollectionTask, RawArticle, TaskLog, utc_now
-from .source_config import SourceConfig, validate_source_config
+from .llm import persist_extracted_record, search_web, structure_pending
+from .models import CollectionTask, ModelSetting, RawArticle, TaskLog, utc_now
+from .source_config import SourceConfig, WebSearchSourceConfig, source_type, validate_source_config
 
 USER_AGENT = "SemiCrawler/1.0 (+public-news-collector)"
 
@@ -152,6 +152,8 @@ def discover_listing(html: str, page_url: str, config: SourceConfig) -> tuple[li
 
 def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
     config = validate_source_config(base_url, raw_config)
+    if isinstance(config, WebSearchSourceConfig):
+        return {"type": "web_search", "query": config.query, "source_hint": config.source_hint}
     listing = fetch_html(config.entry_urls[0], config.request.timeout_seconds)
     links, _ = discover_listing(listing, config.entry_urls[0], config)
     if not links:
@@ -162,8 +164,77 @@ def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
             "body_length": len(article["body"]), "first_paragraph": article["body"].split("\n", 1)[0][:300]}
 
 
+def collect_web_search_source(
+    db: Session,
+    task: CollectionTask,
+    snapshot: dict[str, Any],
+    config: WebSearchSourceConfig,
+) -> tuple[int, int, int, int, int, int]:
+    setting = db.get(ModelSetting, 1)
+    if not setting or not setting.api_key:
+        raise ValueError("联网搜索需要先在 API配置 中保存 Qwen API Key")
+    if "qwen" not in setting.model_name.casefold():
+        raise ValueError("联网搜索需要在 API配置 中使用支持 enable_search 的 Qwen 模型（例如 qwen3-max）")
+
+    result = search_web(
+        setting,
+        query=config.query,
+        source_hint=config.source_hint,
+        start_date=task.start_date,
+        max_results=config.max_results,
+    )
+    configured = json.loads(task.keyword_config_json or "[]")
+    groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
+    saved = deduped = date_filtered = keyword_filtered = 0
+    for item in result.items:
+        url = canonical_url(str(item.original_url), str(item.original_url))
+        body = item.body.strip()
+        if item.published_at and item.published_at < task.start_date:
+            date_filtered += 1
+            continue
+        if task.keyword_filter_enabled:
+            haystack = f"{item.title}\n{body}".casefold()
+            if isinstance(configured, dict):
+                matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+            else:
+                matched = any(keyword in haystack for keyword in groups.get("technical", []))
+            if not matched or is_low_value_event_promotion(item.title, body):
+                keyword_filtered += 1
+                continue
+        digest = hashlib.sha256(" ".join(body.split()).encode()).hexdigest()
+        existing = db.scalar(select(RawArticle).where(
+            (RawArticle.canonical_url == url) | (RawArticle.content_hash == digest)
+        ))
+        if existing:
+            deduped += 1
+            task.deduplicated_count += 1
+            continue
+        article = RawArticle(
+            source_id=snapshot["id"], task_id=task.id, canonical_url=url,
+            title=item.title, published_at=item.published_at,
+            published_text=item.published_at.isoformat() if item.published_at else None,
+            body=body, content_hash=digest, status="completed",
+            model_name=setting.model_name,
+            llm_output=json.dumps(item.model_dump(mode="json"), ensure_ascii=False),
+        )
+        db.add(article)
+        db.flush()
+        persist_extracted_record(db, article, item.record, source_name=item.source_name)
+        saved += 1
+        task.fetched_count += 1
+        task.structured_count += 1
+        db.commit()
+    db.add(TaskLog(task_id=task.id, message=(
+        f"Qwen 联网检索完成 {snapshot['name']}：返回 {len(result.items)} 篇，"
+        f"保存并结构化 {saved} 篇，日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
+    )))
+    return saved, deduped, 0, len(result.items), date_filtered, keyword_filtered
+
+
 def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
     config = validate_source_config(snapshot["base_url"], snapshot.get("config", {}))
+    if isinstance(config, WebSearchSourceConfig):
+        return collect_web_search_source(db, task, snapshot, config)
     configured = json.loads(task.keyword_config_json or "[]")
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
     seen_urls: set[str] = set()
@@ -237,15 +308,18 @@ def run_task(db: Session, task: CollectionTask) -> None:
         except Exception as exc:
             values = (0, 0, 1, 0, 0, 0)
             task.failed_count += 1
-            db.add(TaskLog(task_id=task.id, level="error", message=f"来源配置失败 {snapshot['name']}: {exc}"))
+            action = "联网检索" if source_type(snapshot.get("config", {})) == "web_search" else "来源配置"
+            db.add(TaskLog(task_id=task.id, level="error", message=f"{action}失败 {snapshot['name']}: {exc}"))
         totals = [a + b for a, b in zip(totals, values)]; db.commit()
+    directly_structured = task.structured_count
     structured, llm_failed = structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
-    task.fetched_count, task.deduplicated_count, task.structured_count = totals[0], totals[1], structured
+    task.fetched_count, task.deduplicated_count = totals[0], totals[1]
+    task.structured_count = directly_structured + structured
     task.failed_count = totals[2] + llm_failed
     task.status = "completed" if task.failed_count == 0 else "completed_with_errors"
     task.completed_at = utc_now()
     db.add(TaskLog(task_id=task.id, message=(
         f"任务完成：发现 {totals[3]} 篇，日期过滤 {totals[4]} 篇，关键词跳过 {totals[5]} 篇，"
-        f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {structured} 条，失败 {task.failed_count} 篇"
+        f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {task.structured_count} 条，失败 {task.failed_count} 篇"
     )))
     db.commit()

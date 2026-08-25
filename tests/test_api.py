@@ -33,6 +33,22 @@ def test_source_persistence_and_toggle(client):
     assert updated.json()["enabled"] is False
 
 
+def test_web_search_source_uses_simple_natural_language_config(client):
+    response = client.post("/api/sources", json={
+        "name": "联网搜索：先进封装项目",
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "enabled": True,
+        "config": {
+            "type": "web_search",
+            "query": "检索先进封装项目的签约、开工与扩产动态",
+            "source_hint": "优先政府园区官网和企业新闻中心",
+        },
+    })
+    assert response.status_code == 201
+    assert response.json()["source_type"] == "web_search"
+    assert response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
+
+
 def test_task_snapshot_and_logs(client, monkeypatch):
     def fake_run(db, task):
         from app.models import TaskLog, utc_now

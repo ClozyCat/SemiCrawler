@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
+from typing import Any, Literal
 from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
@@ -26,6 +26,7 @@ class PaginationConfig(BaseModel):
 
 
 class SourceConfig(BaseModel):
+    type: Literal["crawler"] = "crawler"
     entry_urls: list[str] = Field(min_length=1, max_length=20)
     article_url_pattern: str
     selectors: Selectors
@@ -49,7 +50,25 @@ class SourceConfig(BaseModel):
         return self
 
 
-def validate_source_config(base_url: str, config: dict[str, Any]) -> SourceConfig:
+class WebSearchSourceConfig(BaseModel):
+    type: Literal["web_search"]
+    query: str = Field(min_length=2, max_length=2000)
+    source_hint: str = Field(default="", max_length=2000)
+    max_results: int = Field(default=10, ge=1, le=20)
+
+    @field_validator("query", "source_hint")
+    @classmethod
+    def clean_text(cls, value: str) -> str:
+        return value.strip()
+
+
+def source_type(config: dict[str, Any]) -> Literal["crawler", "web_search"]:
+    return "web_search" if config.get("type") == "web_search" else "crawler"
+
+
+def validate_source_config(base_url: str, config: dict[str, Any]) -> SourceConfig | WebSearchSourceConfig:
+    if source_type(config) == "web_search":
+        return WebSearchSourceConfig.model_validate(config)
     parsed = SourceConfig.model_validate(config)
     allowed_host = (urlparse(base_url).hostname or "").lower()
     if not allowed_host:
