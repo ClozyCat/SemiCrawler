@@ -19,7 +19,7 @@ const NAV = [
   { id: 'settings', label: 'API配置', icon: Settings },
 ]
 const EMPTY_FORM = {
-  mode: 'crawler', name: '', base_url: '', enabled: true, search_query: '', source_hint: '',
+  mode: 'crawler', name: '', base_url: '', enabled: true, search_query: '', source_hint: '', max_results: 10,
   config: JSON.stringify({
     entry_urls: ['https://example.com/news'], article_url_pattern: '/news/',
     selectors: { list_links: 'article a', title: 'h1', date: '.publish-date', content: '.content' },
@@ -63,6 +63,7 @@ function SourceForm({ source, onClose, onSaved }) {
     mode: source.source_type || (source.config?.type === 'web_search' ? 'web_search' : 'crawler'),
     search_query: source.config?.query || '',
     source_hint: source.config?.source_hint || '',
+    max_results: source.config?.max_results || 10,
     config: JSON.stringify(source.config, null, 2),
   } : EMPTY_FORM)
   const [error, setError] = useState('')
@@ -78,7 +79,7 @@ function SourceForm({ source, onClose, onSaved }) {
         name: `联网搜索：${query.replace(/\s+/g, ' ').slice(0, 42)}`,
         base_url: DOKOBOT_BASE_URL,
         enabled: form.enabled,
-        config: { type: 'web_search', query, source_hint: form.source_hint.trim(), max_results: 10 },
+        config: { type: 'web_search', query, source_hint: form.source_hint.trim(), max_results: Number(form.max_results) },
       } : { name: form.name.trim(), base_url: form.base_url.trim(), enabled: form.enabled, config: JSON.parse(form.config) }
       const saved = source ? await api.updateSource(source.id, payload) : await api.addSource(payload)
       onSaved(saved); onClose()
@@ -120,6 +121,7 @@ function SourceForm({ source, onClose, onSaved }) {
         </> : <div className="search-source-fields full">
           <label className="field"><span>检索主题与关键词总结</span><textarea required rows="5" value={form.search_query} onChange={(e) => setForm({ ...form, search_query: e.target.value })} placeholder="例如：检索中国大陆先进封装、Chiplet 项目的签约、开工和扩产动态，关注投资金额、项目地点与产能。" /></label>
           <label className="field"><span>网址来源提示</span><textarea rows="4" value={form.source_hint} onChange={(e) => setForm({ ...form, source_hint: e.target.value })} placeholder="例如：优先政府、开发区与企业官网；重点检索 gov.cn、公司新闻中心，也可粘贴具体网址。" /></label>
+          <label className="field"><span>查看数量上限</span><input required type="number" min="1" max="100" step="1" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: e.target.value })} /></label>
           <p className="source-mode-note"><Globe2 />任务执行时由 Dokobot 免费本地模式打开搜索页和原始网页，再由已配置的模型生成可追溯结构化记录。</p>
         </div>}
         {error && <p className="form-error full">{error}</p>}

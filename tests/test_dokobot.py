@@ -3,6 +3,7 @@ from subprocess import CompletedProcess
 
 from app.dokobot import (
     DokobotClient,
+    DokobotPage,
     _decode_output,
     build_search_query,
     parse_search_results,
@@ -51,6 +52,52 @@ https://www.suzhou.gov.cn › news [17]
             "https://www.suzhou.gov.cn/news/project.html",
         )
     ]
+
+
+def test_client_search_reads_later_pages_until_result_limit(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        start = int(url.split("start=")[1]) if "start=" in url else 0
+        links = "\n".join(
+            f"[结果 {index}](https://example.com/news/{index})"
+            for index in range(start + 1, start + 11)
+        )
+        return DokobotPage(title="搜索", url=url, text=links)
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    items = DokobotClient(executable="dokobot").search("先进封装", num=25)
+
+    assert len(items) == 25
+    assert urls == [
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10",
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10&start=10",
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10&start=20",
+    ]
+
+
+def test_client_search_deduplicates_results_across_pages(monkeypatch):
+    calls = 0
+
+    def fake_read(self, url, *, screens=None):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            indexes = range(1, 11)
+        else:
+            indexes = [10, *range(11, 20)]
+        links = "\n".join(
+            f"[结果 {index}](https://example.com/news/{index})" for index in indexes
+        )
+        return DokobotPage(title="搜索", url=url, text=links)
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    items = DokobotClient(executable="dokobot").search("先进封装", num=15)
+
+    assert len(items) == 15
+    assert len({str(item.link) for item in items}) == 15
+    assert calls == 2
 
 
 def test_cli_error_uses_windows_system_encoding_fallback():

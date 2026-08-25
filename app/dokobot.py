@@ -261,21 +261,51 @@ class DokobotClient:
             raise DokobotError("Dokobot 未能从页面提取有效正文") from exc
 
     def search(self, query: str, *, num: int) -> list[DokobotSearchItem]:
-        limit = min(max(num, 1), 20)
+        limit = min(max(num, 1), 100)
+        page_size = 10
         encoded = quote_plus(query)
-        search_urls = [
-            f"https://www.google.com/search?q={encoded}&num={limit}",
-            f"https://www.bing.com/search?q={encoded}&count={limit}",
+        providers = [
+            (
+                "google",
+                lambda offset: (
+                    f"https://www.google.com/search?q={encoded}&num={page_size}"
+                    + (f"&start={offset}" if offset else "")
+                ),
+            ),
+            (
+                "bing",
+                lambda offset: (
+                    f"https://www.bing.com/search?q={encoded}&count={page_size}"
+                    + (f"&first={offset + 1}" if offset else "")
+                ),
+            ),
         ]
         last_error: DokobotError | None = None
-        for search_url in search_urls:
-            try:
-                page = self.read(search_url, screens=3)
-                results = parse_search_results(page.text, limit=limit)
-                if results:
-                    return results
-            except DokobotError as exc:
-                last_error = exc
+        for _, build_url in providers:
+            results: list[DokobotSearchItem] = []
+            seen: set[str] = set()
+            offset = 0
+            while len(results) < limit and offset < 1000:
+                try:
+                    page = self.read(build_url(offset), screens=3)
+                except DokobotError as exc:
+                    last_error = exc
+                    break
+
+                page_results = parse_search_results(page.text, limit=page_size)
+                new_results = [
+                    item for item in page_results if str(item.link) not in seen
+                ]
+                if not new_results:
+                    break
+                results.extend(new_results)
+                seen.update(str(item.link) for item in new_results)
+                if len(results) >= limit:
+                    return results[:limit]
+                offset += page_size
+
+            if results:
+                return results[:limit]
         if last_error:
             raise DokobotError(f"Dokobot 搜索失败：{last_error}") from last_error
         raise DokobotError("Dokobot 未从搜索页提取到结果，请检查浏览器是否出现验证码")
