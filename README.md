@@ -59,6 +59,6 @@ docker compose up -d
 
 ## Debian 部署（Dokobot + Xvfb）
 
-Debian 服务器可以通过 Xvfb 持续运行带 Dokobot 扩展的 Chrome，并让 FastAPI 以同一系统用户访问本地 Native Messaging Bridge。仓库提供了 systemd、Nginx、环境变量模板以及联合检查脚本。
+Debian 服务器可以通过 Xvfb 持续运行带 Dokobot 扩展的 Chrome，并让 FastAPI 以同一系统用户访问本地 Native Messaging Bridge。仓库提供了 systemd、Nginx、环境变量模板以及联合检查脚本；Nginx 默认监听 `8071`，不会占用 80 端口。
 
 完整的逐步部署、首次 VNC 安装扩展、验证、更新、备份和故障排查说明见 [Debian + Xvfb + Dokobot 手动部署](docs/debian-dokobot-deployment.md)。

@@ -3,7 +3,7 @@
 本文将芯闻采集台部署为以下结构：
 
 ```text
-Nginx :80
+Nginx :8071
   |-- /            -> /opt/semicrawler/dist
   `-- /api, /docs  -> FastAPI 127.0.0.1:8000
 
@@ -231,7 +231,13 @@ sudo systemctl enable --now semicrawler-api.service
 sudo systemctl enable --now nginx
 
 curl --fail http://127.0.0.1:8000/api/health
-curl --fail http://127.0.0.1/api/health
+curl --fail http://127.0.0.1:8071/api/health
+```
+
+Nginx 使用 `8071/tcp`，不会占用服务器现有的 80 端口。如果服务器启用了防火墙，请仅向需要访问工作台的网络开放该端口。例如使用 UFW 时：
+
+```bash
+sudo ufw allow from <允许访问的网段> to any port 8071 proto tcp
 ```
 
 也可以运行仓库内的联合检查：
@@ -243,8 +249,8 @@ sudo -u semicrawler -H \
 
 浏览器访问：
 
-- 工作台：`http://<服务器地址>/`
-- API 文档：`http://<服务器地址>/docs`
+- 工作台：`http://<服务器地址>:8071/`
+- API 文档：`http://<服务器地址>:8071/docs`
 
 在工作台“API配置”页面保存 OpenAI 兼容模型地址、模型名和 API Key，然后添加“联网搜索”来源执行一次小规模任务。
 
