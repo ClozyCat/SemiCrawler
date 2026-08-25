@@ -169,6 +169,10 @@ class ArticleRead(BaseModel):
     collected_at: datetime
     record_count: int
 
+    @field_serializer("collected_at")
+    def serialize_collected_at(self, value: datetime) -> datetime:
+        return _as_shanghai_time(value)
+
 
 class ArticleList(BaseModel):
     items: list[ArticleRead]

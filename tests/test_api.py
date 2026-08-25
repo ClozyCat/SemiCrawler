@@ -361,6 +361,11 @@ def test_history_full_text_search_and_manual_structure_guard(client):
     assert raw.status_code == 200
     assert raw.json()["total"] == 1
     assert raw.json()["items"][0]["record_count"] == 1
+    assert raw.json()["items"][0]["collected_at"].endswith("+08:00")
+
+    detail = client.get(f"/api/articles/{article_id}")
+    assert detail.status_code == 200
+    assert detail.json()["collected_at"].endswith("+08:00")
 
     records = client.get("/api/records?q=先进晶圆")
     assert records.status_code == 200
