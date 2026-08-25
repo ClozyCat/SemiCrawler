@@ -4,7 +4,7 @@ import {
   Activity, BookOpen, CalendarDays, CheckCircle2, ChevronDown,
   Database, Download, ExternalLink, FileJson, FileSpreadsheet, History,
   LayoutDashboard, ListFilter, LoaderCircle, Menu, Plus, RefreshCw, Search,
-  Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload, Network, Maximize2, Minimize2, Globe2, Rss,
+  Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload, Network, Maximize2, Minimize2, Globe2, Rss, Square,
 } from 'lucide-react'
 import { api } from './api'
 import * as XLSX from 'xlsx'
@@ -42,6 +42,8 @@ const TASK_STATUS_LABELS = {
   completed: '已完成',
   completed_with_errors: '部分完成',
   failed: '失败',
+  terminating: '终止中',
+  terminated: '已终止',
 }
 
 function taskStatusLabel(status) {
@@ -141,7 +143,7 @@ function Metrics({ sources, tasks, records, articles }) {
   </div>
 }
 
-function TaskPanel({ task, onLogs }) {
+function TaskPanel({ task, onLogs, onTerminate, stoppingIds }) {
   if (!task) return <section className="panel task-panel"><div className="panel-head"><h2>最近任务</h2></div><div className="blank compact"><History /><b>尚未创建任务</b><span>选择来源和日期后即可建立任务。</span></div></section>
   return <section className="panel task-panel">
     <div className="panel-head"><div><h2>最近任务</h2><p>任务 #{task.id} · 资讯起始日期 {task.start_date}</p></div><span className={`status ${task.status}`}>{taskStatusLabel(task.status)}</span></div>
@@ -149,7 +151,7 @@ function TaskPanel({ task, onLogs }) {
       <div className="task-title">{task.source_snapshot.map((item) => item.name).join('、')}</div>
       <div className="task-time">{formatTime(task.completed_at || task.created_at)}</div>
       <div className="task-stats"><div><span>保存原文</span><b>{task.fetched_count}</b></div><div><span>去重</span><b>{task.deduplicated_count}</b></div><div><span>结构化</span><b>{task.structured_count}</b></div><div><span>失败</span><b>{task.failed_count}</b></div></div>
-      <button className="secondary" onClick={() => onLogs(task.id)}>查看运行日志</button>
+      <div className="task-actions"><button className="secondary" onClick={() => onLogs(task.id)}>查看运行日志</button>{['queued', 'running'].includes(task.status) && <button className="danger" disabled={stoppingIds.has(task.id)} onClick={() => onTerminate(task.id)}>{stoppingIds.has(task.id) ? <LoaderCircle className="spin" /> : <Square />}{stoppingIds.has(task.id) ? '终止中' : '终止'}</button>}</div>
     </div>
   </section>
 }
@@ -205,7 +207,7 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
   </section>
 }
 
-function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, onCreateTask, creating, onAddSource, onLogs, onDetail, onHistory, onError }) {
+function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, onCreateTask, creating, onAddSource, onLogs, onTerminate, stoppingIds, onDetail, onHistory, onError }) {
   const [selected, setSelected] = useState([])
   const [startDate, setStartDate] = useState(meta.default_start_date || DEFAULT_DATE)
   // Both task options are enabled by default; users can opt out per task.
@@ -222,7 +224,7 @@ function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, on
       <div className="task-options"><label className="check-field"><input type="checkbox" checked={keywordFilter} onChange={(e) => setKeywordFilter(e.target.checked)} /><span>启用关键词过滤</span></label><label className="check-field"><input type="checkbox" checked={autoStructure} onChange={(e) => setAutoStructure(e.target.checked)} /><span>自动 AI 结构化归档</span></label></div>
       <div className="runbar"><label><CalendarDays /><span>资讯起始日期</span><input aria-label="资讯起始日期" type="date" value={startDate} onChange={(e) => setStartDate(e.target.value)} /></label><button className="primary" disabled={!selected.length || creating || (keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length))} onClick={() => onCreateTask(selected, startDate, keywordFilter, autoStructure)}>{creating ? <LoaderCircle className="spin" /> : <Activity />}{creating ? '正在创建' : '创建任务'}</button></div>
       {keywordFilter && !Object.values(keywordSetting.keyword_config || {}).some((group) => Array.isArray(group) && group.length) && <p className="form-error task-hint">请先在“关键词配置”中添加关键词。</p>}
-    </section><TaskPanel task={tasks[0]} onLogs={onLogs} /></div>
+    </section><TaskPanel task={tasks[0]} onLogs={onLogs} onTerminate={onTerminate} stoppingIds={stoppingIds} /></div>
     <DashboardRecordsPreview records={records} onDetail={onDetail} onHistory={onHistory} onError={onError} />
   </>
 }
@@ -372,7 +374,7 @@ function RawResults({ articles, query, setQuery, onView, onStructure, structurin
   </section>
 }
 
-function HistoryView({ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, onLogs, onDetail, onStructure, structuringIds, onDeleteRecords, onDeleteArticles, onDeleteTasks }) {
+function HistoryView({ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, onLogs, onTerminate, stoppingIds, onDetail, onStructure, structuringIds, onDeleteRecords, onDeleteArticles, onDeleteTasks }) {
   const [tab, setTab] = useState('structured')
   const [rawDetail, setRawDetail] = useState(null)
   const [selectedTasks, setSelectedTasks] = useState([])
@@ -380,7 +382,7 @@ function HistoryView({ meta, tasks, records, filters, setFilters, articles, arti
   const removeTasks = () => { if (selectedTasks.length) { onDeleteTasks(selectedTasks); setSelectedTasks([]) } }
   return <><div className="title-row"><div><span className="eyebrow">本地数据档案</span><h1>数据归档</h1><p>分别检索、审核结构化数据与采集原文。</p></div></div>
     <div className="data-tabs" role="tablist"><button className={tab === 'structured' ? 'active' : ''} onClick={() => setTab('structured')}><Database />结构化数据 <span>{records.total ?? 0}</span></button><button className={tab === 'raw' ? 'active' : ''} onClick={() => setTab('raw')}><FileJson />原始数据 <span>{articles.total ?? 0}</span></button><button className={tab === 'tasks' ? 'active' : ''} onClick={() => setTab('tasks')}><History />采集任务 <span>{tasks.length}</span></button></div>
-    {tab === 'structured' ? <Results {...{ meta, records, filters, setFilters }} onDetail={onDetail} onDelete={onDeleteRecords} /> : tab === 'raw' ? <RawResults {...{ articles, query: articleQuery, setQuery: setArticleQuery, onStructure, structuringIds }} onView={setRawDetail} onDelete={onDeleteArticles} /> : <section className="panel history-table"><div className="results-head"><div><h2>采集任务</h2><p>{tasks.length} 条任务记录</p></div>{selectedTasks.length > 0 && <button className="secondary compact-btn" onClick={removeTasks}><Trash2 />删除 {selectedTasks.length} 条</button>}</div><table><thead><tr><th><input type="checkbox" checked={allTasksSelected} onChange={() => setSelectedTasks(allTasksSelected ? [] : tasks.map((task) => task.id))} /></th><th>任务</th><th>资讯起始日期</th><th>来源</th><th>状态</th><th>保存原文 / 结构化 / 失败</th><th>创建时间</th><th></th></tr></thead><tbody>{tasks.map((task) => <tr key={task.id}><td><input type="checkbox" checked={selectedTasks.includes(task.id)} onChange={() => setSelectedTasks((old) => old.includes(task.id) ? old.filter((item) => item !== task.id) : [...old, task.id])} /></td><td className="strong-cell">#{task.id}</td><td>{task.start_date}</td><td>{task.source_snapshot.map((item) => item.name).join('、')}</td><td><span className={`status ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td>{task.fetched_count} / {task.structured_count} / {task.failed_count}</td><td>{formatTime(task.created_at)}</td><td><button className="text-btn" onClick={() => onLogs(task.id)}>日志</button></td></tr>)}</tbody></table>{!tasks.length && <div className="blank"><History /><b>暂无任务记录</b></div>}</section>}
+    {tab === 'structured' ? <Results {...{ meta, records, filters, setFilters }} onDetail={onDetail} onDelete={onDeleteRecords} /> : tab === 'raw' ? <RawResults {...{ articles, query: articleQuery, setQuery: setArticleQuery, onStructure, structuringIds }} onView={setRawDetail} onDelete={onDeleteArticles} /> : <section className="panel history-table"><div className="results-head"><div><h2>采集任务</h2><p>{tasks.length} 条任务记录</p></div>{selectedTasks.length > 0 && <button className="secondary compact-btn" onClick={removeTasks}><Trash2 />删除 {selectedTasks.length} 条</button>}</div><table><thead><tr><th><input type="checkbox" checked={allTasksSelected} onChange={() => setSelectedTasks(allTasksSelected ? [] : tasks.map((task) => task.id))} /></th><th>任务</th><th>资讯起始日期</th><th>来源</th><th>状态</th><th>保存原文 / 结构化 / 失败</th><th>创建时间</th><th></th></tr></thead><tbody>{tasks.map((task) => <tr key={task.id}><td><input type="checkbox" checked={selectedTasks.includes(task.id)} onChange={() => setSelectedTasks((old) => old.includes(task.id) ? old.filter((item) => item !== task.id) : [...old, task.id])} /></td><td className="strong-cell">#{task.id}</td><td>{task.start_date}</td><td>{task.source_snapshot.map((item) => item.name).join('、')}</td><td><span className={`status ${task.status}`}>{taskStatusLabel(task.status)}</span></td><td>{task.fetched_count} / {task.structured_count} / {task.failed_count}</td><td>{formatTime(task.created_at)}</td><td><div className="row-actions"><button className="text-btn" onClick={() => onLogs(task.id)}>日志</button>{['queued', 'running'].includes(task.status) && <button className="text-btn danger-text" disabled={stoppingIds.has(task.id)} onClick={() => onTerminate(task.id)}><Square />{stoppingIds.has(task.id) ? '终止中' : '终止'}</button>}</div></td></tr>)}</tbody></table>{!tasks.length && <div className="blank"><History /><b>暂无任务记录</b></div>}</section>}
     {rawDetail && <RawArticleModal article={rawDetail} onClose={() => setRawDetail(null)} />}
   </>
 }
@@ -435,6 +437,7 @@ export default function App() {
   const [articles, setArticles] = useState({ items: [], total: 0 })
   const [articleQuery, setArticleQuery] = useState('')
   const [structuringIds, setStructuringIds] = useState(() => new Set())
+  const [stoppingIds, setStoppingIds] = useState(() => new Set())
   const [sourceModal, setSourceModal] = useState(null)
   const [logs, setLogs] = useState(null)
   const [detailId, setDetailId] = useState(null)
@@ -461,7 +464,7 @@ export default function App() {
     await refreshAnalytics()
   }, [load, refreshHistory, refreshAnalytics])
   useEffect(() => { load() }, [load])
-  useEffect(() => { const timer = setInterval(async () => { if (tasks.some((task) => ['queued', 'running'].includes(task.status))) { await load(); await refreshHistory() } }, 2000); return () => clearInterval(timer) }, [tasks, load, refreshHistory])
+  useEffect(() => { const timer = setInterval(async () => { if (tasks.some((task) => ['queued', 'running', 'terminating'].includes(task.status))) { await load(); await refreshHistory() } }, 2000); return () => clearInterval(timer) }, [tasks, load, refreshHistory])
   useEffect(() => { const timer = setTimeout(() => api.records(filters).then(setRecords).catch((err) => setError(err.message)), 180); return () => clearTimeout(timer) }, [filters])
   useEffect(() => { const timer = setTimeout(refreshAnalytics, 220); return () => clearTimeout(timer) }, [refreshAnalytics])
   useEffect(() => { const timer = setTimeout(() => api.articles({ q: articleQuery }).then(setArticles).catch((err) => setError(err.message)), 180); return () => clearTimeout(timer) }, [articleQuery])
@@ -472,6 +475,15 @@ export default function App() {
     catch (err) { setError(err.message) } finally { setCreating(false) }
   }
   const showLogs = async (id) => { try { setLogs(await api.logs(id)) } catch (err) { setError(err.message) } }
+  const terminateTask = async (id) => {
+    if (!window.confirm('确定终止这个任务吗？已保存的采集结果会保留。')) return
+    setStoppingIds((old) => new Set(old).add(id)); setError('')
+    try {
+      const task = await api.terminateTask(id)
+      setTasks((old) => old.map((item) => item.id === id ? task : item))
+    } catch (err) { setError(err.message) }
+    finally { setStoppingIds((old) => { const next = new Set(old); next.delete(id); return next }) }
+  }
   const sourceSaved = (saved) => setSources((old) => old.some((item) => item.id === saved.id) ? old.map((item) => item.id === saved.id ? saved : item) : [...old, saved])
   const toggleSource = async (source, enabled) => { try { sourceSaved(await api.updateSource(source.id, { enabled })) } catch (err) { setError(err.message) } }
   const structureArticle = async (id) => {
@@ -497,7 +509,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className={mobileNav ? 'open' : ''}><div className="brand"><span>芯</span><div><b>第二战线情报站</b><small>SEMI INTELLIGENCE</small></div></div><nav>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}</nav><div className="service-state"><i /><div><b>本地服务正常</b></div></div></aside>
     <div className="main-column"><header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(!mobileNav)} aria-label="菜单"><Menu /></button><span>{activeLabel}</span><div><button className="icon-btn" aria-label="刷新" onClick={refreshAll}><RefreshCw /></button></div></header>
-      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds }} onLogs={showLogs} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
+      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting, stoppingIds }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onTerminate={terminateTask} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds, stoppingIds }} onLogs={showLogs} onTerminate={terminateTask} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
     </div>
     {mobileNav && <button className="nav-backdrop" aria-label="关闭菜单" onClick={() => setMobileNav(false)} />}
     {sourceModal && <SourceForm source={sourceModal === 'new' ? null : sourceModal} onClose={() => setSourceModal(null)} onSaved={sourceSaved} />}

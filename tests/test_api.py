@@ -126,6 +126,67 @@ def test_task_snapshots_keyword_and_structure_options(client, monkeypatch):
     assert response.json()["keyword_config"] == config
 
 
+def test_queued_task_can_be_terminated(client, monkeypatch):
+    monkeypatch.setattr("app.main.run_task", lambda db, task: None)
+    source_id = client.get("/api/sources").json()[0]["id"]
+    created = client.post(
+        "/api/tasks", json={"source_ids": [source_id], "start_date": "2026-08-01"}
+    ).json()
+
+    response = client.post(f"/api/tasks/{created['id']}/terminate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "terminated"
+    assert response.json()["progress"] == 100
+    assert response.json()["completed_at"] is not None
+    logs = client.get(f"/api/tasks/{created['id']}/logs").json()
+    assert "开始执行前已终止" in logs[-1]["message"]
+
+
+def test_running_task_can_be_terminated(client, monkeypatch):
+    def leave_running(db, task):
+        task.status = "running"
+        task.started_at = utc_now()
+        db.commit()
+
+    from app.models import utc_now
+
+    monkeypatch.setattr("app.main.run_task", leave_running)
+    source_id = client.get("/api/sources").json()[0]["id"]
+    created = client.post(
+        "/api/tasks", json={"source_ids": [source_id], "start_date": "2026-08-01"}
+    ).json()
+
+    response = client.post(f"/api/tasks/{created['id']}/terminate")
+
+    assert response.status_code == 200
+    assert response.json()["status"] == "terminated"
+    assert response.json()["completed_at"] is not None
+    repeated = client.post(f"/api/tasks/{created['id']}/terminate")
+    assert repeated.status_code == 200
+    assert repeated.json()["status"] == "terminated"
+
+
+def test_finished_task_cannot_be_terminated(client, monkeypatch):
+    def complete(db, task):
+        task.status = "completed"
+        task.completed_at = utc_now()
+        db.commit()
+
+    from app.models import utc_now
+
+    monkeypatch.setattr("app.main.run_task", complete)
+    source_id = client.get("/api/sources").json()[0]["id"]
+    created = client.post(
+        "/api/tasks", json={"source_ids": [source_id], "start_date": "2026-08-01"}
+    ).json()
+
+    response = client.post(f"/api/tasks/{created['id']}/terminate")
+
+    assert response.status_code == 409
+    assert "已经结束" in response.json()["detail"]
+
+
 def test_empty_csv_and_xlsx_have_formal_columns(client):
     expected_headers = [label for _, label in EXPORT_COLUMNS]
     csv_response = client.get("/api/exports?format=csv")

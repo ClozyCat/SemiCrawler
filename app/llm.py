@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+from collections.abc import Callable
 from datetime import date
 from typing import Any
 from urllib.parse import urlparse
@@ -377,7 +378,11 @@ def structure_article(
     return len(records)
 
 
-def structure_pending(db: Session, task: CollectionTask) -> tuple[int, int]:
+def structure_pending(
+    db: Session,
+    task: CollectionTask,
+    stop_requested: Callable[[], None] | None = None,
+) -> tuple[int, int]:
     setting = db.get(ModelSetting, 1)
     articles = db.scalars(select(RawArticle).where(RawArticle.task_id == task.id, RawArticle.status == "pending")).all()
     if not setting or not setting.enabled or not setting.api_key:
@@ -386,7 +391,11 @@ def structure_pending(db: Session, task: CollectionTask) -> tuple[int, int]:
         return 0, 0
     count = failed = 0
     for article in articles:
+        if stop_requested:
+            stop_requested()
         created = structure_article(db, article, setting)
+        if stop_requested:
+            stop_requested()
         count += created
         task.structured_count += created
         if article.status == "review_required":

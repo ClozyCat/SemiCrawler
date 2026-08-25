@@ -9,10 +9,11 @@ from app.crawler import (
     is_low_value_event_promotion,
     keyword_values,
     parse_article,
+    run_task,
 )
 from app.database import SessionLocal
 from app.dokobot import DokobotPage, DokobotSearchItem
-from app.models import CollectionTask, ModelSetting, RawArticle, Source
+from app.models import CollectionTask, ModelSetting, RawArticle, Source, TaskLog
 from app.source_config import SourceConfig
 
 
@@ -220,3 +221,38 @@ def test_event_preview_without_substantive_news_is_filtered():
 def test_event_report_with_concrete_industry_action_is_kept():
     body = "论坛现场，甲公司与无锡高新区正式签约先进封装项目，投资总额20亿元，项目计划年内开工。"
     assert is_low_value_event_promotion("半导体产业论坛在无锡召开", body) is False
+
+
+def test_run_task_honors_termination_requested_during_collection(monkeypatch):
+    snapshot = {
+        "id": 1,
+        "name": "终止测试来源",
+        "base_url": "https://example.com",
+        "config": {},
+    }
+    with SessionLocal() as db:
+        task = CollectionTask(
+            status="queued",
+            start_date=date(2026, 8, 20),
+            source_ids_json="[1]",
+            source_snapshot_json=json.dumps([snapshot]),
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+        def request_termination(*_):
+            with SessionLocal() as other_db:
+                other_task = other_db.get(CollectionTask, task_id)
+                other_task.status = "terminating"
+                other_db.commit()
+            return 0, 0, 0, 0, 0, 0
+
+        monkeypatch.setattr("app.crawler.collect_source", request_termination)
+        run_task(db, task)
+
+        db.refresh(task)
+        assert task.status == "terminated"
+        assert task.completed_at is not None
+        logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task_id)).all()
+        assert logs[-1].message == "任务已终止"

@@ -100,6 +100,7 @@ export const api = {
   tasks: () => request('/tasks'),
   createTask: (task) => request('/tasks', { method: 'POST', body: JSON.stringify(task) }),
   task: (id) => request(`/tasks/${id}`),
+  terminateTask: (id) => request(`/tasks/${id}/terminate`, { method: 'POST' }),
   logs: (id) => request(`/tasks/${id}/logs`),
   deleteTasks: (ids) => request('/tasks', { method: 'DELETE', body: JSON.stringify({ ids }) }),
   records: (params = {}) => {

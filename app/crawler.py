@@ -27,6 +27,17 @@ from .source_config import (
 
 USER_AGENT = "SemiCrawler/1.0 (+public-news-collector)"
 
+
+class TaskTerminationRequested(Exception):
+    pass
+
+
+def ensure_task_active(db: Session, task: CollectionTask) -> None:
+    db.refresh(task, attribute_names=["status"])
+    if task.status in {"terminating", "terminated"}:
+        raise TaskTerminationRequested
+
+
 _EVENT_TERMS_RE = re.compile(
     r"(?:论坛|峰会|年会|大会|展会|展览会|博览会|交流会|研讨会|同期活动)"
 )
@@ -223,6 +234,7 @@ def collect_web_search_source(
     snapshot: dict[str, Any],
     config: WebSearchSourceConfig,
 ) -> tuple[int, int, int, int, int, int]:
+    ensure_task_active(db, task)
     setting = db.get(ModelSetting, 1)
     if not setting or not setting.api_key:
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
@@ -230,11 +242,14 @@ def collect_web_search_source(
     client = DokobotClient()
     search_query = build_search_query(config.query, config.source_hint, task.start_date)
     results = client.search(search_query, num=config.max_results)
+    ensure_task_active(db, task)
     pages = []
     failed = 0
     for search_item in results:
+        ensure_task_active(db, task)
         try:
             pages.append((search_item, client.read(str(search_item.link))))
+            ensure_task_active(db, task)
         except DokobotError as exc:
             failed += 1
             db.add(
@@ -250,6 +265,7 @@ def collect_web_search_source(
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
     saved = structured = deduped = date_filtered = keyword_filtered = 0
     for search_item, page in pages:
+        ensure_task_active(db, task)
         url = canonical_url(str(page.url), str(page.url))
         body = page.text.strip()
         title = page.title or search_item.title
@@ -303,6 +319,7 @@ def collect_web_search_source(
         db.flush()
         source_name = (urlparse(url).hostname or snapshot["name"]).removeprefix("www.")
         created = structure_article(db, article, setting, source_name=source_name)
+        ensure_task_active(db, task)
         structured += created
         if article.status == "review_required":
             failed += 1
@@ -341,9 +358,11 @@ def collect_source(
     discovered = saved = date_filtered = keyword_filtered = deduped = failed = 0
     delay = 60 / config.request.rate_limit_per_minute
     for first_entry in config.entry_urls:
+        ensure_task_active(db, task)
         entry = first_entry
         visited_pages: set[str] = set()
         for _ in range(config.pagination.max_pages):
+            ensure_task_active(db, task)
             if not entry or entry in visited_pages:
                 break
             visited_pages.add(entry)
@@ -351,6 +370,9 @@ def collect_source(
                 links, next_url = discover_listing(
                     fetch_html(entry, config.request.timeout_seconds), entry, config
                 )
+                ensure_task_active(db, task)
+            except TaskTerminationRequested:
+                raise
             except Exception as exc:
                 failed += 1
                 task.failed_count += 1
@@ -365,6 +387,7 @@ def collect_source(
                 break
             page_dates: list[date] = []
             for url in links:
+                ensure_task_active(db, task)
                 if url in seen_urls:
                     continue
                 seen_urls.add(url)
@@ -373,6 +396,7 @@ def collect_source(
                     article = parse_article(
                         fetch_html(url, config.request.timeout_seconds), url, config
                     )
+                    ensure_task_active(db, task)
                     if article["published_at"]:
                         page_dates.append(article["published_at"])
                     if (
@@ -422,6 +446,8 @@ def collect_source(
                     )
                     saved += 1
                     task.fetched_count += 1
+                except TaskTerminationRequested:
+                    raise
                 except Exception as exc:
                     failed += 1
                     task.failed_count += 1
@@ -443,46 +469,68 @@ def collect_source(
 
 
 def run_task(db: Session, task: CollectionTask) -> None:
+    ensure_task_active(db, task)
+    if task.status != "queued":
+        return
     task.status = "running"
     task.started_at = utc_now()
     db.commit()
     totals = [0, 0, 0, 0, 0, 0]
-    for snapshot in json.loads(task.source_snapshot_json):
-        try:
-            values = collect_source(db, task, snapshot)
-        except Exception as exc:
-            values = (0, 0, 1, 0, 0, 0)
-            task.failed_count += 1
-            action = (
-                "联网检索"
-                if source_type(snapshot.get("config", {})) == "web_search"
-                else "来源配置"
-            )
-            db.add(
-                TaskLog(
-                    task_id=task.id,
-                    level="error",
-                    message=f"{action}失败 {snapshot['name']}: {exc}",
+    try:
+        for snapshot in json.loads(task.source_snapshot_json):
+            ensure_task_active(db, task)
+            try:
+                values = collect_source(db, task, snapshot)
+            except TaskTerminationRequested:
+                raise
+            except Exception as exc:
+                values = (0, 0, 1, 0, 0, 0)
+                task.failed_count += 1
+                action = (
+                    "联网检索"
+                    if source_type(snapshot.get("config", {})) == "web_search"
+                    else "来源配置"
                 )
+                db.add(
+                    TaskLog(
+                        task_id=task.id,
+                        level="error",
+                        message=f"{action}失败 {snapshot['name']}: {exc}",
+                    )
+                )
+            totals = [a + b for a, b in zip(totals, values)]
+            db.commit()
+        ensure_task_active(db, task)
+        directly_structured = task.structured_count
+        structured, llm_failed = (
+            structure_pending(
+                db,
+                task,
+                stop_requested=lambda: ensure_task_active(db, task),
             )
-        totals = [a + b for a, b in zip(totals, values)]
-        db.commit()
-    directly_structured = task.structured_count
-    structured, llm_failed = (
-        structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
-    )
-    task.fetched_count, task.deduplicated_count = totals[0], totals[1]
-    task.structured_count = directly_structured + structured
-    task.failed_count = totals[2] + llm_failed
-    task.status = "completed" if task.failed_count == 0 else "completed_with_errors"
-    task.completed_at = utc_now()
-    db.add(
-        TaskLog(
-            task_id=task.id,
-            message=(
-                f"任务完成：发现 {totals[3]} 篇，日期过滤 {totals[4]} 篇，关键词跳过 {totals[5]} 篇，"
-                f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {task.structured_count} 条，失败 {task.failed_count} 篇"
-            ),
+            if task.auto_structure_enabled
+            else (0, 0)
         )
-    )
-    db.commit()
+        ensure_task_active(db, task)
+        task.fetched_count, task.deduplicated_count = totals[0], totals[1]
+        task.structured_count = directly_structured + structured
+        task.failed_count = totals[2] + llm_failed
+        task.status = "completed" if task.failed_count == 0 else "completed_with_errors"
+        task.completed_at = utc_now()
+        db.add(
+            TaskLog(
+                task_id=task.id,
+                message=(
+                    f"任务完成：发现 {totals[3]} 篇，日期过滤 {totals[4]} 篇，关键词跳过 {totals[5]} 篇，"
+                    f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {task.structured_count} 条，失败 {task.failed_count} 篇"
+                ),
+            )
+        )
+        db.commit()
+    except TaskTerminationRequested:
+        db.rollback()
+        db.refresh(task)
+        task.status = "terminated"
+        task.completed_at = utc_now()
+        db.add(TaskLog(task_id=task.id, level="notice", message="任务已终止"))
+        db.commit()

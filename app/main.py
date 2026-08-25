@@ -13,11 +13,12 @@ from fastapi.responses import StreamingResponse
 from sqlalchemy import String, cast, delete, func, or_, select
 from sqlalchemy.orm import Session
 
-from .constants import DEFAULT_START_DATE, INFO_TYPES
 from .analytics import build_analytics
-from .crawler import keyword_groups, run_task, test_source
+from .constants import DEFAULT_START_DATE, INFO_TYPES
+from .crawler import TaskTerminationRequested, keyword_groups, run_task, test_source
 from .database import Base, SessionLocal, engine, get_db, migrate_legacy_database
 from .exporting import make_csv, make_xlsx
+from .llm import structure_article
 from .models import (
     CollectionTask,
     ExportRecord,
@@ -29,12 +30,12 @@ from .models import (
     TaskLog,
     utc_now,
 )
-from .llm import structure_article
 from .schemas import (
     AnalyticsOverview,
     AppMeta,
     ArticleList,
     ArticleRead,
+    DeleteIds,
     LogRead,
     ModelSettingRead,
     ModelSettingUpdate,
@@ -49,7 +50,6 @@ from .schemas import (
     StructureResult,
     TaskCreate,
     TaskRead,
-    DeleteIds,
 )
 from .seed import seed_default_sources
 from .source_config import source_type, validate_source_config
@@ -92,9 +92,15 @@ def source_read(source: Source) -> SourceRead:
 
 
 def task_read(task: CollectionTask) -> TaskRead:
-    progress = {"queued": 0, "running": 50, "completed": 100, "failed": 100}.get(
-        task.status, 0
-    )
+    progress = {
+        "queued": 0,
+        "running": 50,
+        "terminating": 50,
+        "completed": 100,
+        "completed_with_errors": 100,
+        "failed": 100,
+        "terminated": 100,
+    }.get(task.status, 0)
     return TaskRead(
         id=task.id,
         status=task.status,
@@ -226,7 +232,6 @@ def create_task(
         }
         for item in sources
     ]
-    now = utc_now()
     task = CollectionTask(
         status="queued",
         start_date=payload.start_date,
@@ -264,6 +269,8 @@ def _run_task_background(task_id: int) -> None:
         if task:
             try:
                 run_task(session, task)
+            except TaskTerminationRequested:
+                return
             except Exception as exc:
                 session.rollback()
                 task = session.get(CollectionTask, task_id)
@@ -292,6 +299,29 @@ def get_task(task_id: int, db: Session = Depends(get_db)):
     task = db.get(CollectionTask, task_id)
     if not task:
         raise HTTPException(404, "任务不存在")
+    return task_read(task)
+
+
+@app.post("/api/tasks/{task_id}/terminate", response_model=TaskRead)
+def terminate_task(task_id: int, db: Session = Depends(get_db)):
+    task = db.get(CollectionTask, task_id)
+    if not task:
+        raise HTTPException(404, "任务不存在")
+    if task.status in {"completed", "completed_with_errors", "failed"}:
+        raise HTTPException(409, "任务已经结束，无法终止")
+    if task.status == "terminated":
+        return task_read(task)
+
+    message = (
+        "任务在开始执行前已终止"
+        if task.status == "queued"
+        else "任务已终止，当前处理步骤返回后将停止后台执行"
+    )
+    task.status = "terminated"
+    task.completed_at = utc_now()
+    db.add(TaskLog(task_id=task.id, level="notice", message=message))
+    db.commit()
+    db.refresh(task)
     return task_read(task)
 
 
