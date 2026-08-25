@@ -10,7 +10,7 @@ User=semicrawler
 Group=semicrawler
 Environment=HOME=/home/semicrawler
 Environment=DISPLAY=:99
-ExecStart=/usr/bin/google-chrome-stable --user-data-dir=/home/semicrawler/.config/google-chrome --no-first-run --no-default-browser-check --disable-dev-shm-usage --window-size=1920,1080 about:blank
+ExecStart=/usr/bin/google-chrome-stable --user-data-dir=/home/semicrawler/.config/google-chrome --no-first-run --no-default-browser-check --disable-dev-shm-usage --ignore-certificate-errors --window-size=1920,1080 about:blank
 Restart=always
 RestartSec=5
 TimeoutStopSec=20
