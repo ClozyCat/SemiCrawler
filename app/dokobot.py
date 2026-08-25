@@ -41,6 +41,10 @@ _SEARCH_HOSTS = {
     "www.bing.com",
 }
 _CLI_LOCK = threading.Lock()
+_SEARCH_ENGINE_HOME = {
+    "google": "https://www.google.com/",
+    "bing": "https://www.bing.com/",
+}
 
 
 def build_search_query(query: str, source_hint: str, start_date: date) -> str:
@@ -167,6 +171,7 @@ class DokobotClient:
             executable or configured_executable or shutil.which("dokobot") or ""
         )
         self.home = os.getenv("SEMICRAWLER_DOKOBOT_HOME", "").strip()
+        self.search_engine = "google"
         if not self.executable:
             raise DokobotError(
                 "未找到 Dokobot CLI，请先安装 @dokobot/cli "
@@ -260,52 +265,63 @@ class DokobotClient:
         except ValidationError as exc:
             raise DokobotError("Dokobot 未能从页面提取有效正文") from exc
 
+    def select_search_engine(self) -> str:
+        """Select the first search engine reachable through the local browser."""
+        errors: list[str] = []
+        for engine in ("google", "bing"):
+            try:
+                self.read(_SEARCH_ENGINE_HOME[engine], screens=1)
+            except DokobotError as exc:
+                errors.append(f"{engine}: {exc}")
+                continue
+            self.search_engine = engine
+            return engine
+        detail = "; ".join(errors)
+        raise DokobotError(
+            "Google 和 Bing 均无法连接，已跳过联网搜索任务"
+            + (f"：{detail}" if detail else "")
+        )
+
     def search(self, query: str, *, num: int) -> list[DokobotSearchItem]:
         limit = min(max(num, 1), 100)
         page_size = 10
         encoded = quote_plus(query)
-        providers = [
-            (
-                "google",
-                lambda offset: (
-                    f"https://www.google.com/search?q={encoded}&num={page_size}"
-                    + (f"&start={offset}" if offset else "")
-                ),
-            ),
-            (
-                "bing",
-                lambda offset: (
-                    f"https://www.bing.com/search?q={encoded}&count={page_size}"
-                    + (f"&first={offset + 1}" if offset else "")
-                ),
-            ),
-        ]
+        if self.search_engine == "google":
+            build_url = lambda offset: (
+                f"https://www.google.com/search?q={encoded}&num={page_size}"
+                + (f"&start={offset}" if offset else "")
+            )
+        elif self.search_engine == "bing":
+            build_url = lambda offset: (
+                f"https://www.bing.com/search?q={encoded}&count={page_size}"
+                + (f"&first={offset + 1}" if offset else "")
+            )
+        else:
+            raise DokobotError(f"不支持的搜索引擎：{self.search_engine}")
+
         last_error: DokobotError | None = None
-        for _, build_url in providers:
-            results: list[DokobotSearchItem] = []
-            seen: set[str] = set()
-            offset = 0
-            while len(results) < limit and offset < 1000:
-                try:
-                    page = self.read(build_url(offset), screens=3)
-                except DokobotError as exc:
-                    last_error = exc
-                    break
+        results: list[DokobotSearchItem] = []
+        seen: set[str] = set()
+        offset = 0
+        while len(results) < limit and offset < 1000:
+            try:
+                page = self.read(build_url(offset), screens=3)
+            except DokobotError as exc:
+                last_error = exc
+                break
 
-                page_results = parse_search_results(page.text, limit=page_size)
-                new_results = [
-                    item for item in page_results if str(item.link) not in seen
-                ]
-                if not new_results:
-                    break
-                results.extend(new_results)
-                seen.update(str(item.link) for item in new_results)
-                if len(results) >= limit:
-                    return results[:limit]
-                offset += page_size
-
-            if results:
+            page_results = parse_search_results(page.text, limit=page_size)
+            new_results = [item for item in page_results if str(item.link) not in seen]
+            if not new_results:
+                break
+            results.extend(new_results)
+            seen.update(str(item.link) for item in new_results)
+            if len(results) >= limit:
                 return results[:limit]
+            offset += page_size
+
+        if results:
+            return results[:limit]
         if last_error:
             raise DokobotError(f"Dokobot 搜索失败：{last_error}") from last_error
         raise DokobotError("Dokobot 未从搜索页提取到结果，请检查浏览器是否出现验证码")

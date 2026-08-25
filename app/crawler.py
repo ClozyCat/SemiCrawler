@@ -268,6 +268,14 @@ def collect_web_search_source(
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
 
     client = DokobotClient()
+    search_engine = client.select_search_engine()
+    db.add(
+        TaskLog(
+            task_id=task.id,
+            message=f"搜索引擎连通性检测通过，本次联网搜索使用 {search_engine}",
+        )
+    )
+    db.commit()
     try:
         planned_queries = plan_search_queries(
             setting,

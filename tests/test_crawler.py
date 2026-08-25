@@ -13,7 +13,7 @@ from app.crawler import (
     run_task,
 )
 from app.database import SessionLocal
-from app.dokobot import DokobotPage, DokobotSearchItem
+from app.dokobot import DokobotError, DokobotPage, DokobotSearchItem
 from app.models import CollectionTask, ModelSetting, RawArticle, Source, TaskLog
 from app.source_config import SourceConfig
 
@@ -123,6 +123,9 @@ def test_collection_counts_only_persisted_articles_as_fetched(monkeypatch):
 
 def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
     class FakeDokobotClient:
+        def select_search_engine(self):
+            return "google"
+
         def search(self, query, *, num):
             assert "after:2026-08-20" in query
             assert num == 10
@@ -211,6 +214,9 @@ def test_web_search_executes_planned_queries_and_merges_results(monkeypatch):
     searched = []
 
     class FakeDokobotClient:
+        def select_search_engine(self):
+            return "google"
+
         def search(self, query, *, num):
             searched.append(query)
             suffix = "shared" if len(searched) == 1 else "second"
@@ -309,6 +315,9 @@ def test_web_search_falls_back_to_original_query_when_planning_fails(monkeypatch
     searched = []
 
     class FakeDokobotClient:
+        def select_search_engine(self):
+            return "google"
+
         def search(self, query, *, num):
             searched.append(query)
             return []
@@ -366,6 +375,77 @@ def test_web_search_falls_back_to_original_query_when_planning_fails(monkeypatch
         assert searched == ["先进封装开工 after:2026-08-20"]
         logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
         assert any("已回退到原始查询" in log.message for log in logs)
+
+
+def test_web_search_skips_planning_and_search_when_engines_are_unreachable(
+    monkeypatch,
+):
+    calls = {"plan": 0, "search": 0}
+
+    class FakeDokobotClient:
+        def select_search_engine(self):
+            raise DokobotError("Google 和 Bing 均无法连接，已跳过联网搜索任务")
+
+        def search(self, query, *, num):
+            calls["search"] += 1
+            return []
+
+    def fake_plan(*args, **kwargs):
+        calls["plan"] += 1
+        return ["不应执行"]
+
+    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.plan_search_queries", fake_plan)
+    raw_config = {
+        "type": "web_search",
+        "query": "先进封装开工",
+        "source_hint": "",
+        "max_results": 10,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="连通性失败测试",
+            base_url="https://dokobot.ai",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        try:
+            collect_source(
+                db,
+                task,
+                {
+                    "id": source.id,
+                    "name": source.name,
+                    "base_url": source.base_url,
+                    "config": raw_config,
+                },
+            )
+        except DokobotError as exc:
+            assert "已跳过联网搜索任务" in str(exc)
+        else:
+            raise AssertionError("expected connectivity error")
+
+    assert calls == {"plan": 0, "search": 0}
 
 
 def test_keyword_values_use_cell_values_and_ignore_column_names():

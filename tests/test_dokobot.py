@@ -3,6 +3,7 @@ from subprocess import CompletedProcess
 
 from app.dokobot import (
     DokobotClient,
+    DokobotError,
     DokobotPage,
     _decode_output,
     build_search_query,
@@ -98,6 +99,76 @@ def test_client_search_deduplicates_results_across_pages(monkeypatch):
     assert len(items) == 15
     assert len({str(item.link) for item in items}) == 15
     assert calls == 2
+
+
+def test_search_engine_connectivity_prefers_google(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        return DokobotPage(title="Search", url=url, text="available")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    assert client.select_search_engine() == "google"
+    assert client.search_engine == "google"
+    assert urls == ["https://www.google.com/"]
+
+
+def test_search_engine_connectivity_falls_back_to_bing(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        if "google.com" in url:
+            raise DokobotError("unreachable")
+        return DokobotPage(title="Search", url=url, text="available")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    assert client.select_search_engine() == "bing"
+    assert client.search_engine == "bing"
+    assert urls == ["https://www.google.com/", "https://www.bing.com/"]
+
+
+def test_search_engine_connectivity_raises_when_both_are_unreachable(monkeypatch):
+    def fake_read(self, url, *, screens=None):
+        raise DokobotError("unreachable")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    try:
+        client.select_search_engine()
+    except DokobotError as exc:
+        assert "Google 和 Bing 均无法连接" in str(exc)
+        assert "已跳过联网搜索任务" in str(exc)
+    else:
+        raise AssertionError("expected connectivity error")
+
+
+def test_client_search_uses_selected_bing_engine(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        return DokobotPage(
+            title="Search",
+            url=url,
+            text="[结果](https://example.com/news/1)",
+        )
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+    client.search_engine = "bing"
+
+    client.search("先进封装", num=1)
+
+    assert urls == [
+        "https://www.bing.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&count=10"
+    ]
 
 
 def test_cli_error_uses_windows_system_encoding_fallback():
