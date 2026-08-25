@@ -1,3 +1,4 @@
+from datetime import date
 from io import BytesIO
 
 from openpyxl import load_workbook
@@ -15,16 +16,32 @@ def test_defaults_sources_and_meta(client):
     assert meta.json()["info_types"][:2] == ["项目规划", "项目立项"]
 
     sources = client.get("/api/sources").json()
-    assert [item["name"] for item in sources] == ["全球半导体观察（DRAMx）", "半导体产业网"]
+    assert [item["name"] for item in sources] == [
+        "全球半导体观察（DRAMx）",
+        "半导体产业网",
+    ]
     assert all(item["enabled"] for item in sources)
 
 
 def test_source_persistence_and_toggle(client):
-    response = client.post("/api/sources", json={
-        "name": "测试来源", "base_url": "https://example.com",
-        "enabled": True, "config": {"entry_urls": ["https://example.com/news"],
-            "article_url_pattern": "/news/\\d+", "selectors": {"list_links": "a", "title": "h1", "date": ".date", "content": ".content"}},
-    })
+    response = client.post(
+        "/api/sources",
+        json={
+            "name": "测试来源",
+            "base_url": "https://example.com",
+            "enabled": True,
+            "config": {
+                "entry_urls": ["https://example.com/news"],
+                "article_url_pattern": "/news/\\d+",
+                "selectors": {
+                    "list_links": "a",
+                    "title": "h1",
+                    "date": ".date",
+                    "content": ".content",
+                },
+            },
+        },
+    )
     assert response.status_code == 201
     source_id = response.json()["id"]
 
@@ -34,29 +51,40 @@ def test_source_persistence_and_toggle(client):
 
 
 def test_web_search_source_uses_simple_natural_language_config(client):
-    response = client.post("/api/sources", json={
-        "name": "联网搜索：先进封装项目",
-        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
-        "enabled": True,
-        "config": {
-            "type": "web_search",
-            "query": "检索先进封装项目的签约、开工与扩产动态",
-            "source_hint": "优先政府园区官网和企业新闻中心",
+    response = client.post(
+        "/api/sources",
+        json={
+            "name": "联网搜索：先进封装项目",
+            "base_url": "https://dokobot.ai",
+            "enabled": True,
+            "config": {
+                "type": "web_search",
+                "query": "检索先进封装项目的签约、开工与扩产动态",
+                "source_hint": "优先政府园区官网和企业新闻中心",
+            },
         },
-    })
+    )
     assert response.status_code == 201
     assert response.json()["source_type"] == "web_search"
-    assert response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
+    assert (
+        response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
+    )
 
 
 def test_task_snapshot_and_logs(client, monkeypatch):
     def fake_run(db, task):
         from app.models import TaskLog, utc_now
-        task.status = "completed"; task.completed_at = utc_now()
-        db.add(TaskLog(task_id=task.id, message="任务完成：Mock")); db.commit()
+
+        task.status = "completed"
+        task.completed_at = utc_now()
+        db.add(TaskLog(task_id=task.id, message="任务完成：Mock"))
+        db.commit()
+
     monkeypatch.setattr("app.main.run_task", fake_run)
     source_ids = [item["id"] for item in client.get("/api/sources").json()]
-    response = client.post("/api/tasks", json={"source_ids": source_ids, "start_date": "2026-08-01"})
+    response = client.post(
+        "/api/tasks", json={"source_ids": source_ids, "start_date": "2026-08-01"}
+    )
     assert response.status_code == 201
     task = response.json()
     assert task["status"] == "queued"
@@ -80,8 +108,16 @@ def test_task_snapshots_keyword_and_structure_options(client, monkeypatch):
     monkeypatch.setattr("app.main.run_task", lambda db, task: None)
     source_id = client.get("/api/sources").json()[0]["id"]
     config = [{"industry": "先进封装", "field": "Chiplet", "keywords": "CoWoS、TSV"}]
-    response = client.post("/api/tasks", json={"source_ids": [source_id], "start_date": "2026-08-01",
-        "keyword_filter_enabled": True, "auto_structure_enabled": True, "keyword_config": config})
+    response = client.post(
+        "/api/tasks",
+        json={
+            "source_ids": [source_id],
+            "start_date": "2026-08-01",
+            "keyword_filter_enabled": True,
+            "auto_structure_enabled": True,
+            "keyword_config": config,
+        },
+    )
     assert response.status_code == 201
     assert response.json()["keyword_filter_enabled"] is True
     assert response.json()["auto_structure_enabled"] is True
@@ -115,40 +151,85 @@ def test_records_support_multiple_info_type_filters(client):
     from app.database import SessionLocal
 
     with SessionLocal() as db:
-        db.add_all([
-            StructuredRecord(region="华东", company_name="甲公司", info_type="项目立项", source_name="测试来源"),
-            StructuredRecord(region="华南", company_name="乙公司", info_type="项目签约", source_name="测试来源"),
-            StructuredRecord(region="华北", company_name="丙公司", info_type="项目竣工", source_name="测试来源"),
-        ])
+        db.add_all(
+            [
+                StructuredRecord(
+                    region="华东",
+                    company_name="甲公司",
+                    info_type="项目立项",
+                    source_name="测试来源",
+                ),
+                StructuredRecord(
+                    region="华南",
+                    company_name="乙公司",
+                    info_type="项目签约",
+                    source_name="测试来源",
+                ),
+                StructuredRecord(
+                    region="华北",
+                    company_name="丙公司",
+                    info_type="项目竣工",
+                    source_name="测试来源",
+                ),
+            ]
+        )
         db.commit()
 
     response = client.get("/api/records?info_type=项目立项&info_type=项目签约")
     assert response.status_code == 200
     assert response.json()["total"] == 2
-    assert {item["info_type"] for item in response.json()["items"]} == {"项目立项", "项目签约"}
+    assert {item["info_type"] for item in response.json()["items"]} == {
+        "项目立项",
+        "项目签约",
+    }
 
 
 def test_analytics_overview_builds_keywords_and_relations(client):
     from app.database import SessionLocal
 
     with SessionLocal() as db:
-        db.add_all([
-            StructuredRecord(region="合肥", organization="高新区", company_name="长鑫存储",
-                info_type="产能扩建", project_name="晶圆产线", details="DRAM 晶圆产能扩建",
-                source_name="测试来源"),
-            StructuredRecord(region="合肥", company_name="长鑫存储", info_type="研发进展",
-                project_name="DRAM 芯片", details="DRAM 芯片研发取得进展", source_name="测试来源"),
-        ])
+        db.add_all(
+            [
+                StructuredRecord(
+                    region="合肥",
+                    organization="高新区",
+                    company_name="长鑫存储",
+                    info_type="产能扩建",
+                    project_name="晶圆产线",
+                    details="DRAM 晶圆产能扩建",
+                    source_name="测试来源",
+                ),
+                StructuredRecord(
+                    region="合肥",
+                    company_name="长鑫存储",
+                    info_type="研发进展",
+                    project_name="DRAM 芯片",
+                    details="DRAM 芯片研发取得进展",
+                    source_name="测试来源",
+                ),
+            ]
+        )
         db.commit()
 
-    client.put("/api/settings/model", json={"base_url": "https://api.example.com", "model_name": "test-model",
-        "keyword_config": [{"industry": "存储", "field": "先进封装", "keywords": "DRAM、晶圆"}]})
+    client.put(
+        "/api/settings/model",
+        json={
+            "base_url": "https://api.example.com",
+            "model_name": "test-model",
+            "keyword_config": [
+                {"industry": "存储", "field": "先进封装", "keywords": "DRAM、晶圆"}
+            ],
+        },
+    )
     response = client.get("/api/analytics/overview?region=合肥")
     assert response.status_code == 200
     data = response.json()
     assert data["summary"]["record_count"] == 2
     assert data["summary"]["entity_count"] >= 4
-    assert any(node["name"] == "长鑫存储" and node["value"] == 2 for node in data["graph"]["nodes"])
+    assert any(
+        node["name"] == "长鑫存储" and node["value"] == 2
+        for node in data["graph"]["nodes"]
+    )
     assert any(edge["value"] >= 1 for edge in data["graph"]["edges"])
     assert any(item["name"] == "产能扩建" for item in data["info_types"])
     assert {item["text"] for item in data["keywords"]} == {"DRAM", "晶圆"}
@@ -158,13 +239,24 @@ def test_analytics_merges_same_entity_across_record_fields(client):
     from app.database import SessionLocal
 
     with SessionLocal() as db:
-        db.add(StructuredRecord(region="海外", organization="Cerebras Systems",
-            company_name="Cerebras Systems", info_type="经营动态", source_name="测试来源"))
+        db.add(
+            StructuredRecord(
+                region="海外",
+                organization="Cerebras Systems",
+                company_name="Cerebras Systems",
+                info_type="经营动态",
+                source_name="测试来源",
+            )
+        )
         db.commit()
 
     response = client.get("/api/analytics/overview")
     assert response.status_code == 200
-    nodes = [node for node in response.json()["graph"]["nodes"] if node["name"] == "Cerebras Systems"]
+    nodes = [
+        node
+        for node in response.json()["graph"]["nodes"]
+        if node["name"] == "Cerebras Systems"
+    ]
     assert len(nodes) == 1
     assert nodes[0]["category"] == "企业"
 
@@ -175,13 +267,30 @@ def test_history_full_text_search_and_manual_structure_guard(client):
 
     with SessionLocal() as db:
         source = db.query(Source).first()
-        article = RawArticle(source_id=source.id, canonical_url="https://example.com/chip-project",
-            title="晶圆厂扩建计划", published_text="2026年8月20日", body="华东晶圆制造项目新增产线",
-            content_hash="a" * 64, status="pending")
-        db.add(article); db.flush()
-        db.add(StructuredRecord(article_id=article.id, region="华东", company_name="晶圆公司",
-            info_type="产能扩建", investment_amount="未披露", project_name="新增产线",
-            source_name=source.name, original_url=article.canonical_url, details="建设先进晶圆产线"))
+        article = RawArticle(
+            source_id=source.id,
+            canonical_url="https://example.com/chip-project",
+            title="晶圆厂扩建计划",
+            published_text="2026年8月20日",
+            body="华东晶圆制造项目新增产线",
+            content_hash="a" * 64,
+            status="pending",
+        )
+        db.add(article)
+        db.flush()
+        db.add(
+            StructuredRecord(
+                article_id=article.id,
+                region="华东",
+                company_name="晶圆公司",
+                info_type="产能扩建",
+                investment_amount="未披露",
+                project_name="新增产线",
+                source_name=source.name,
+                original_url=article.canonical_url,
+                details="建设先进晶圆产线",
+            )
+        )
         article_id = article.id
         db.commit()
 
@@ -205,9 +314,17 @@ def test_manual_structure_requires_configured_model(client):
 
     with SessionLocal() as db:
         source = db.query(Source).first()
-        article = RawArticle(source_id=source.id, canonical_url="https://example.com/unstructured",
-            title="待处理原文", body="正文", content_hash="b" * 64, status="pending")
-        db.add(article); db.commit(); article_id = article.id
+        article = RawArticle(
+            source_id=source.id,
+            canonical_url="https://example.com/unstructured",
+            title="待处理原文",
+            body="正文",
+            content_hash="b" * 64,
+            status="pending",
+        )
+        db.add(article)
+        db.commit()
+        article_id = article.id
 
     response = client.post(f"/api/articles/{article_id}/structure")
     assert response.status_code == 409
@@ -218,17 +335,30 @@ def test_manual_structure_ignores_auto_structure_switch(client, monkeypatch):
     from app.database import SessionLocal
     from app.models import Source
 
-    setting = client.put("/api/settings/model", json={
-        "base_url": "https://api.example.com", "model_name": "test-model",
-        "api_key": "sk-secret1234", "enabled": False,
-    })
+    setting = client.put(
+        "/api/settings/model",
+        json={
+            "base_url": "https://api.example.com",
+            "model_name": "test-model",
+            "api_key": "sk-secret1234",
+            "enabled": False,
+        },
+    )
     assert setting.status_code == 200
 
     with SessionLocal() as db:
         source = db.query(Source).first()
-        article = RawArticle(source_id=source.id, canonical_url="https://example.com/manual",
-            title="手动结构化原文", body="正文", content_hash="c" * 64, status="pending")
-        db.add(article); db.commit(); article_id = article.id
+        article = RawArticle(
+            source_id=source.id,
+            canonical_url="https://example.com/manual",
+            title="手动结构化原文",
+            body="正文",
+            content_hash="c" * 64,
+            status="pending",
+        )
+        db.add(article)
+        db.commit()
+        article_id = article.id
 
     def fake_structure(db, article, setting):
         article.status = "completed"
@@ -238,11 +368,23 @@ def test_manual_structure_ignores_auto_structure_switch(client, monkeypatch):
     monkeypatch.setattr("app.main.structure_article", fake_structure)
     response = client.post(f"/api/articles/{article_id}/structure")
     assert response.status_code == 200
-    assert response.json() == {"article_id": article_id, "created_count": 1, "status": "completed"}
+    assert response.json() == {
+        "article_id": article_id,
+        "created_count": 1,
+        "status": "completed",
+    }
 
 
 def test_model_setting_masks_secret(client):
-    response = client.put("/api/settings/model", json={"base_url": "https://api.example.com", "model_name": "test-model", "api_key": "sk-secret1234", "enabled": True})
+    response = client.put(
+        "/api/settings/model",
+        json={
+            "base_url": "https://api.example.com",
+            "model_name": "test-model",
+            "api_key": "sk-secret1234",
+            "enabled": True,
+        },
+    )
     assert response.status_code == 200
     assert response.json()["has_api_key"] is True
     assert response.json()["api_key_hint"].endswith("1234")
@@ -250,9 +392,57 @@ def test_model_setting_masks_secret(client):
     assert "api_key" not in client.get("/api/settings/model").json()
 
 
+def test_background_task_rolls_back_before_recording_failure(client, monkeypatch):
+    from app.database import SessionLocal
+    from app.main import _run_task_background
+    from app.models import CollectionTask, Source, TaskLog
+
+    with SessionLocal() as db:
+        source = db.query(Source).first()
+        task = CollectionTask(
+            status="queued",
+            start_date=date(2026, 8, 1),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+        )
+        db.add(task)
+        db.commit()
+        task_id = task.id
+
+    def fail_after_flush(db, task):
+        db.add(
+            Source(name="冲突来源", base_url="https://example.com", config_json="{}")
+        )
+        db.flush()
+        db.add(
+            Source(name="冲突来源", base_url="https://example.com", config_json="{}")
+        )
+        db.flush()
+
+    monkeypatch.setattr("app.main.run_task", fail_after_flush)
+    _run_task_background(task_id)
+
+    with SessionLocal() as db:
+        task = db.get(CollectionTask, task_id)
+        logs = db.query(TaskLog).filter(TaskLog.task_id == task_id).all()
+        assert task.status == "failed"
+        assert task.completed_at is not None
+        assert any("任务失败" in log.message for log in logs)
+
+
 def test_source_rejects_cross_domain_entry(client):
-    response = client.post("/api/sources", json={"name": "越界来源", "base_url": "https://example.com", "config": {
-        "entry_urls": ["https://other.example/news"], "article_url_pattern": "/news/", "selectors": {"title": "h1", "date": ".date", "content": ".content"}}})
+    response = client.post(
+        "/api/sources",
+        json={
+            "name": "越界来源",
+            "base_url": "https://example.com",
+            "config": {
+                "entry_urls": ["https://other.example/news"],
+                "article_url_pattern": "/news/",
+                "selectors": {"title": "h1", "date": ".date", "content": ".content"},
+            },
+        },
+    )
     assert response.status_code == 422
 
 

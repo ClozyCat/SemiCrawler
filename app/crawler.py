@@ -15,13 +15,21 @@ from bs4 import BeautifulSoup
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .llm import persist_extracted_record, search_web, structure_pending
+from .dokobot import DokobotClient, DokobotError, build_search_query
+from .llm import structure_article, structure_pending
 from .models import CollectionTask, ModelSetting, RawArticle, TaskLog, utc_now
-from .source_config import SourceConfig, WebSearchSourceConfig, source_type, validate_source_config
+from .source_config import (
+    SourceConfig,
+    WebSearchSourceConfig,
+    source_type,
+    validate_source_config,
+)
 
 USER_AGENT = "SemiCrawler/1.0 (+public-news-collector)"
 
-_EVENT_TERMS_RE = re.compile(r"(?:论坛|峰会|年会|大会|展会|展览会|博览会|交流会|研讨会|同期活动)")
+_EVENT_TERMS_RE = re.compile(
+    r"(?:论坛|峰会|年会|大会|展会|展览会|博览会|交流会|研讨会|同期活动)"
+)
 _EVENT_PROMOTION_PATTERNS = (
     re.compile(r"(?:将于|将在|拟于|定于).{0,40}(?:举办|召开|开幕|举行)"),
     re.compile(r"(?:同期|现场).{0,20}(?:论坛|活动|圆桌|发布)"),
@@ -44,14 +52,22 @@ def keyword_values(config: list[dict[str, Any]]) -> list[str]:
         for value in row.values():
             if not isinstance(value, str):
                 continue
-            values.extend(item.strip().casefold() for item in re.split(r"[、,，;；\n]+", value) if item.strip())
+            values.extend(
+                item.strip().casefold()
+                for item in re.split(r"[、,，;；\n]+", value)
+                if item.strip()
+            )
     return list(dict.fromkeys(values))
 
 
 def keyword_groups(config: Any) -> dict[str, list[str]]:
     """Return the three configured vocabularies, with legacy arrays as technical terms."""
     if isinstance(config, list):
-        return {"technical": keyword_values(config), "industry_noun": [], "industry_verb": []}
+        return {
+            "technical": keyword_values(config),
+            "industry_noun": [],
+            "industry_verb": [],
+        }
     if not isinstance(config, dict):
         return {"technical": [], "industry_noun": [], "industry_verb": []}
 
@@ -72,7 +88,9 @@ def is_low_value_event_promotion(title: str, body: str) -> bool:
     text = " ".join(f"{title}\n{body}".split())
     if not _EVENT_TERMS_RE.search(text) or _SUBSTANTIVE_EVENT_RE.search(text):
         return False
-    promotion_signals = sum(bool(pattern.search(text)) for pattern in _EVENT_PROMOTION_PATTERNS)
+    promotion_signals = sum(
+        bool(pattern.search(text)) for pattern in _EVENT_PROMOTION_PATTERNS
+    )
     return promotion_signals >= 2
 
 
@@ -81,7 +99,12 @@ def _robots(origin: str) -> RobotFileParser:
     parser = RobotFileParser()
     parser.set_url(origin.rstrip("/") + "/robots.txt")
     try:
-        response = httpx.get(parser.url, headers={"User-Agent": USER_AGENT}, timeout=10, follow_redirects=True)
+        response = httpx.get(
+            parser.url,
+            headers={"User-Agent": USER_AGENT},
+            timeout=10,
+            follow_redirects=True,
+        )
         parser.parse(response.text.splitlines() if response.is_success else [])
     except httpx.HTTPError:
         parser.parse([])
@@ -92,7 +115,9 @@ def fetch_html(url: str, timeout: float = 20) -> str:
     parsed = urlparse(url)
     if not _robots(f"{parsed.scheme}://{parsed.netloc}").can_fetch(USER_AGENT, url):
         raise PermissionError(f"robots.txt 不允许采集 {url}")
-    response = httpx.get(url, headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True)
+    response = httpx.get(
+        url, headers={"User-Agent": USER_AGENT}, timeout=timeout, follow_redirects=True
+    )
     response.raise_for_status()
     return response.text
 
@@ -100,11 +125,19 @@ def fetch_html(url: str, timeout: float = 20) -> str:
 def canonical_url(url: str, base_url: str) -> str:
     parsed = urlparse(urljoin(base_url, url))
     path = parsed.path.rstrip("/") or "/"
-    return urlunparse((parsed.scheme.lower(), parsed.netloc.lower(), path, "", parsed.query, ""))
+    return urlunparse(
+        (parsed.scheme.lower(), parsed.netloc.lower(), path, "", parsed.query, "")
+    )
 
 
 def _text(node) -> str:
-    return "\n".join(line.strip() for line in node.get_text("\n").splitlines() if line.strip()) if node else ""
+    return (
+        "\n".join(
+            line.strip() for line in node.get_text("\n").splitlines() if line.strip()
+        )
+        if node
+        else ""
+    )
 
 
 def parse_date(text: str, formats: list[str]) -> date | None:
@@ -125,16 +158,25 @@ def parse_article(html: str, url: str, config: SourceConfig) -> dict[str, Any]:
     date_text = _text(soup.select_one(config.selectors.date))[:200]
     content = soup.select_one(config.selectors.content)
     if content:
-        for unwanted in content.select("script,style,nav,aside,.advertisement,.related,.copyright,.prevnext"):
+        for unwanted in content.select(
+            "script,style,nav,aside,.advertisement,.related,.copyright,.prevnext"
+        ):
             unwanted.decompose()
     body = _text(content)
     if not title or len(body) < 50:
         raise ValueError(f"选择器未解析出有效标题或正文（正文 {len(body)} 字）")
-    return {"canonical_url": canonical_url(url, url), "title": title, "published_text": date_text,
-            "published_at": parse_date(date_text, config.date_formats), "body": body}
+    return {
+        "canonical_url": canonical_url(url, url),
+        "title": title,
+        "published_text": date_text,
+        "published_at": parse_date(date_text, config.date_formats),
+        "body": body,
+    }
 
 
-def discover_listing(html: str, page_url: str, config: SourceConfig) -> tuple[list[str], str | None]:
+def discover_listing(
+    html: str, page_url: str, config: SourceConfig
+) -> tuple[list[str], str | None]:
     soup = BeautifulSoup(html, "html.parser")
     links = []
     for anchor in soup.select(config.selectors.list_links):
@@ -153,15 +195,26 @@ def discover_listing(html: str, page_url: str, config: SourceConfig) -> tuple[li
 def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
     config = validate_source_config(base_url, raw_config)
     if isinstance(config, WebSearchSourceConfig):
-        return {"type": "web_search", "query": config.query, "source_hint": config.source_hint}
+        return {
+            "type": "web_search",
+            "query": config.query,
+            "source_hint": config.source_hint,
+        }
     listing = fetch_html(config.entry_urls[0], config.request.timeout_seconds)
     links, _ = discover_listing(listing, config.entry_urls[0], config)
     if not links:
         raise ValueError("入口页没有匹配到文章链接")
-    article = parse_article(fetch_html(links[0], config.request.timeout_seconds), links[0], config)
-    return {"url": article["canonical_url"], "title": article["title"],
-            "published_at": article["published_at"], "published_text": article["published_text"],
-            "body_length": len(article["body"]), "first_paragraph": article["body"].split("\n", 1)[0][:300]}
+    article = parse_article(
+        fetch_html(links[0], config.request.timeout_seconds), links[0], config
+    )
+    return {
+        "url": article["canonical_url"],
+        "title": article["title"],
+        "published_at": article["published_at"],
+        "published_text": article["published_text"],
+        "body_length": len(article["body"]),
+        "first_paragraph": article["body"].split("\n", 1)[0][:300],
+    }
 
 
 def collect_web_search_source(
@@ -172,66 +225,113 @@ def collect_web_search_source(
 ) -> tuple[int, int, int, int, int, int]:
     setting = db.get(ModelSetting, 1)
     if not setting or not setting.api_key:
-        raise ValueError("联网搜索需要先在 API配置 中保存 Qwen API Key")
-    if "qwen" not in setting.model_name.casefold():
-        raise ValueError("联网搜索需要在 API配置 中使用支持 enable_search 的 Qwen 模型（例如 qwen3-max）")
+        raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
 
-    result = search_web(
-        setting,
-        query=config.query,
-        source_hint=config.source_hint,
-        start_date=task.start_date,
-        max_results=config.max_results,
-    )
+    client = DokobotClient()
+    search_query = build_search_query(config.query, config.source_hint, task.start_date)
+    results = client.search(search_query, num=config.max_results)
+    pages = []
+    failed = 0
+    for search_item in results:
+        try:
+            pages.append((search_item, client.read(str(search_item.link))))
+        except DokobotError as exc:
+            failed += 1
+            db.add(
+                TaskLog(
+                    task_id=task.id,
+                    level="error",
+                    message=f"Dokobot 读页失败 {search_item.link}: {exc}",
+                )
+            )
+            db.commit()
+
     configured = json.loads(task.keyword_config_json or "[]")
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
-    saved = deduped = date_filtered = keyword_filtered = 0
-    for item in result.items:
-        url = canonical_url(str(item.original_url), str(item.original_url))
-        body = item.body.strip()
-        if item.published_at and item.published_at < task.start_date:
+    saved = structured = deduped = date_filtered = keyword_filtered = 0
+    for search_item, page in pages:
+        url = canonical_url(str(page.url), str(page.url))
+        body = page.text.strip()
+        title = page.title or search_item.title
+        published_at = parse_date(
+            f"{title}\n{search_item.snippet}\n{body[:4000]}",
+            [
+                "%Y-%m-%d",
+                "%Y/%m/%d",
+                "%Y年%m月%d日",
+            ],
+        )
+        if published_at and published_at < task.start_date:
             date_filtered += 1
             continue
         if task.keyword_filter_enabled:
-            haystack = f"{item.title}\n{body}".casefold()
+            haystack = f"{title}\n{body}".casefold()
             if isinstance(configured, dict):
-                matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                matched = all(
+                    any(keyword in haystack for keyword in terms)
+                    for terms in groups.values()
+                )
             else:
-                matched = any(keyword in haystack for keyword in groups.get("technical", []))
-            if not matched or is_low_value_event_promotion(item.title, body):
+                matched = any(
+                    keyword in haystack for keyword in groups.get("technical", [])
+                )
+            if not matched or is_low_value_event_promotion(title, body):
                 keyword_filtered += 1
                 continue
         digest = hashlib.sha256(" ".join(body.split()).encode()).hexdigest()
-        existing = db.scalar(select(RawArticle).where(
-            (RawArticle.canonical_url == url) | (RawArticle.content_hash == digest)
-        ))
+        existing = db.scalar(
+            select(RawArticle).where(
+                (RawArticle.canonical_url == url) | (RawArticle.content_hash == digest)
+            )
+        )
         if existing:
             deduped += 1
             task.deduplicated_count += 1
             continue
         article = RawArticle(
-            source_id=snapshot["id"], task_id=task.id, canonical_url=url,
-            title=item.title, published_at=item.published_at,
-            published_text=item.published_at.isoformat() if item.published_at else None,
-            body=body, content_hash=digest, status="completed",
-            model_name=setting.model_name,
-            llm_output=json.dumps(item.model_dump(mode="json"), ensure_ascii=False),
+            source_id=snapshot["id"],
+            task_id=task.id,
+            canonical_url=url,
+            title=title[:500],
+            published_at=published_at,
+            published_text=published_at.isoformat() if published_at else None,
+            body=body,
+            content_hash=digest,
+            status="pending",
         )
         db.add(article)
         db.flush()
-        persist_extracted_record(db, article, item.record, source_name=item.source_name)
+        source_name = (urlparse(url).hostname or snapshot["name"]).removeprefix("www.")
+        created = structure_article(db, article, setting, source_name=source_name)
+        structured += created
+        if article.status == "review_required":
+            failed += 1
+            db.add(
+                TaskLog(
+                    task_id=task.id,
+                    level="error",
+                    message=f"结构化待审核 {url}: {article.error_message}",
+                )
+            )
         saved += 1
         task.fetched_count += 1
-        task.structured_count += 1
+        task.structured_count += created
         db.commit()
-    db.add(TaskLog(task_id=task.id, message=(
-        f"Qwen 联网检索完成 {snapshot['name']}：返回 {len(result.items)} 篇，"
-        f"保存并结构化 {saved} 篇，日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
-    )))
-    return saved, deduped, 0, len(result.items), date_filtered, keyword_filtered
+    db.add(
+        TaskLog(
+            task_id=task.id,
+            message=(
+                f"Dokobot 本地联网检索完成 {snapshot['name']}：找到 {len(results)} 篇，读取 {len(pages)} 篇，"
+                f"保存 {saved} 篇、结构化 {structured} 条，日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
+            ),
+        )
+    )
+    return saved, deduped, failed, len(results), date_filtered, keyword_filtered
 
 
-def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) -> tuple[int, int, int, int, int, int]:
+def collect_source(
+    db: Session, task: CollectionTask, snapshot: dict[str, Any]
+) -> tuple[int, int, int, int, int, int]:
     config = validate_source_config(snapshot["base_url"], snapshot.get("config", {}))
     if isinstance(config, WebSearchSourceConfig):
         return collect_web_search_source(db, task, snapshot, config)
@@ -248,47 +348,90 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
                 break
             visited_pages.add(entry)
             try:
-                links, next_url = discover_listing(fetch_html(entry, config.request.timeout_seconds), entry, config)
+                links, next_url = discover_listing(
+                    fetch_html(entry, config.request.timeout_seconds), entry, config
+                )
             except Exception as exc:
                 failed += 1
                 task.failed_count += 1
-                db.add(TaskLog(task_id=task.id, level="error", message=f"入口抓取失败 {entry}: {exc}"))
+                db.add(
+                    TaskLog(
+                        task_id=task.id,
+                        level="error",
+                        message=f"入口抓取失败 {entry}: {exc}",
+                    )
+                )
                 db.commit()
                 break
             page_dates: list[date] = []
             for url in links:
                 if url in seen_urls:
                     continue
-                seen_urls.add(url); discovered += 1
+                seen_urls.add(url)
+                discovered += 1
                 try:
-                    article = parse_article(fetch_html(url, config.request.timeout_seconds), url, config)
+                    article = parse_article(
+                        fetch_html(url, config.request.timeout_seconds), url, config
+                    )
                     if article["published_at"]:
                         page_dates.append(article["published_at"])
-                    if article["published_at"] and article["published_at"] < task.start_date:
+                    if (
+                        article["published_at"]
+                        and article["published_at"] < task.start_date
+                    ):
                         date_filtered += 1
                         continue
                     if task.keyword_filter_enabled:
                         haystack = f"{article['title']}\n{article['body']}".casefold()
                         if isinstance(configured, dict):
-                            matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                            matched = all(
+                                any(keyword in haystack for keyword in terms)
+                                for terms in groups.values()
+                            )
                         else:
-                            matched = any(keyword in haystack for keyword in groups.get("technical", []))
-                        if (not matched or is_low_value_event_promotion(article["title"], article["body"])):
+                            matched = any(
+                                keyword in haystack
+                                for keyword in groups.get("technical", [])
+                            )
+                        if not matched or is_low_value_event_promotion(
+                            article["title"], article["body"]
+                        ):
                             keyword_filtered += 1
                             continue
-                    digest = hashlib.sha256(" ".join(article["body"].split()).encode()).hexdigest()
-                    existing = db.scalar(select(RawArticle).where((RawArticle.canonical_url == article["canonical_url"]) | (RawArticle.content_hash == digest)))
+                    digest = hashlib.sha256(
+                        " ".join(article["body"].split()).encode()
+                    ).hexdigest()
+                    existing = db.scalar(
+                        select(RawArticle).where(
+                            (RawArticle.canonical_url == article["canonical_url"])
+                            | (RawArticle.content_hash == digest)
+                        )
+                    )
                     if existing:
                         deduped += 1
                         task.deduplicated_count += 1
                         continue
-                    db.add(RawArticle(source_id=snapshot["id"], task_id=task.id, content_hash=digest, status="pending", **article))
+                    db.add(
+                        RawArticle(
+                            source_id=snapshot["id"],
+                            task_id=task.id,
+                            content_hash=digest,
+                            status="pending",
+                            **article,
+                        )
+                    )
                     saved += 1
                     task.fetched_count += 1
                 except Exception as exc:
                     failed += 1
                     task.failed_count += 1
-                    db.add(TaskLog(task_id=task.id, level="error", message=f"抓取失败 {url}: {exc}"))
+                    db.add(
+                        TaskLog(
+                            task_id=task.id,
+                            level="error",
+                            message=f"抓取失败 {url}: {exc}",
+                        )
+                    )
                 finally:
                     # Expose per-article counters to the polling API while the task is running.
                     db.commit()
@@ -300,7 +443,9 @@ def collect_source(db: Session, task: CollectionTask, snapshot: dict[str, Any]) 
 
 
 def run_task(db: Session, task: CollectionTask) -> None:
-    task.status = "running"; task.started_at = utc_now(); db.commit()
+    task.status = "running"
+    task.started_at = utc_now()
+    db.commit()
     totals = [0, 0, 0, 0, 0, 0]
     for snapshot in json.loads(task.source_snapshot_json):
         try:
@@ -308,18 +453,36 @@ def run_task(db: Session, task: CollectionTask) -> None:
         except Exception as exc:
             values = (0, 0, 1, 0, 0, 0)
             task.failed_count += 1
-            action = "联网检索" if source_type(snapshot.get("config", {})) == "web_search" else "来源配置"
-            db.add(TaskLog(task_id=task.id, level="error", message=f"{action}失败 {snapshot['name']}: {exc}"))
-        totals = [a + b for a, b in zip(totals, values)]; db.commit()
+            action = (
+                "联网检索"
+                if source_type(snapshot.get("config", {})) == "web_search"
+                else "来源配置"
+            )
+            db.add(
+                TaskLog(
+                    task_id=task.id,
+                    level="error",
+                    message=f"{action}失败 {snapshot['name']}: {exc}",
+                )
+            )
+        totals = [a + b for a, b in zip(totals, values)]
+        db.commit()
     directly_structured = task.structured_count
-    structured, llm_failed = structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
+    structured, llm_failed = (
+        structure_pending(db, task) if task.auto_structure_enabled else (0, 0)
+    )
     task.fetched_count, task.deduplicated_count = totals[0], totals[1]
     task.structured_count = directly_structured + structured
     task.failed_count = totals[2] + llm_failed
     task.status = "completed" if task.failed_count == 0 else "completed_with_errors"
     task.completed_at = utc_now()
-    db.add(TaskLog(task_id=task.id, message=(
-        f"任务完成：发现 {totals[3]} 篇，日期过滤 {totals[4]} 篇，关键词跳过 {totals[5]} 篇，"
-        f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {task.structured_count} 条，失败 {task.failed_count} 篇"
-    )))
+    db.add(
+        TaskLog(
+            task_id=task.id,
+            message=(
+                f"任务完成：发现 {totals[3]} 篇，日期过滤 {totals[4]} 篇，关键词跳过 {totals[5]} 篇，"
+                f"保存 {totals[0]} 篇，去重 {totals[1]} 篇，结构化 {task.structured_count} 条，失败 {task.failed_count} 篇"
+            ),
+        )
+    )
     db.commit()

@@ -1,20 +1,37 @@
-from datetime import date
 import json
+from datetime import date
 
 from sqlalchemy import func, select
 
-from app.crawler import collect_source, discover_listing, is_low_value_event_promotion, keyword_values, parse_article
+from app.crawler import (
+    collect_source,
+    discover_listing,
+    is_low_value_event_promotion,
+    keyword_values,
+    parse_article,
+)
 from app.database import SessionLocal
-from app.models import CollectionTask, RawArticle, Source
+from app.dokobot import DokobotPage, DokobotSearchItem
+from app.models import CollectionTask, ModelSetting, RawArticle, Source
 from app.source_config import SourceConfig
 
 
 def config(**selector_overrides):
-    selectors = {"list_links": ".items a", "title": "h1", "date": ".info", "content": ".content"}
+    selectors = {
+        "list_links": ".items a",
+        "title": "h1",
+        "date": ".info",
+        "content": ".content",
+    }
     selectors.update(selector_overrides)
-    return SourceConfig.model_validate({"entry_urls": ["https://example.com/news"],
-        "article_url_pattern": "/news/\\d{8}-\\d+\\.html$", "selectors": selectors,
-        "pagination": {"next_page_selector": "a.next", "max_pages": 2}})
+    return SourceConfig.model_validate(
+        {
+            "entry_urls": ["https://example.com/news"],
+            "article_url_pattern": "/news/\\d{8}-\\d+\\.html$",
+            "selectors": selectors,
+            "pagination": {"next_page_selector": "a.next", "max_pages": 2},
+        }
+    )
 
 
 def test_listing_filters_categories_and_finds_next_page():
@@ -37,34 +54,157 @@ def test_collection_counts_only_persisted_articles_as_fetched(monkeypatch):
     article_template = """<h1>{title}</h1><div class='info'>发布于 {published}</div><div class='content'><p>这是用于验证采集统计口径的半导体项目正文，项目计划建设先进封装生产线并引入多套生产设备，建成后将面向汽车电子和高性能计算客户提供长期稳定的芯片制造服务。</p></div>"""
     pages = {
         "https://example.com/news": listing,
-        "https://example.com/news/20260819-1.html": article_template.format(title="旧项目", published="2026年08月19日"),
-        "https://example.com/news/20260821-2.html": article_template.format(title="新项目", published="2026年08月21日"),
+        "https://example.com/news/20260819-1.html": article_template.format(
+            title="旧项目", published="2026年08月19日"
+        ),
+        "https://example.com/news/20260821-2.html": article_template.format(
+            title="新项目", published="2026年08月21日"
+        ),
     }
     monkeypatch.setattr("app.crawler.fetch_html", lambda url, timeout=20: pages[url])
     monkeypatch.setattr("app.crawler.time.sleep", lambda _: None)
     raw_config = {
-        "entry_urls": ["https://example.com/news"], "article_url_pattern": "/news/\\d{8}-\\d+\\.html$",
-        "selectors": {"list_links": ".items a", "title": "h1", "date": ".info", "content": ".content"},
+        "entry_urls": ["https://example.com/news"],
+        "article_url_pattern": "/news/\\d{8}-\\d+\\.html$",
+        "selectors": {
+            "list_links": ".items a",
+            "title": "h1",
+            "date": ".info",
+            "content": ".content",
+        },
         "pagination": {"max_pages": 1},
     }
 
     with SessionLocal() as db:
-        source = Source(name="统计测试来源", base_url="https://example.com", config_json=json.dumps(raw_config))
-        db.add(source); db.flush()
-        task = CollectionTask(status="running", start_date=date(2026, 8, 20), source_ids_json=f"[{source.id}]",
-            source_snapshot_json="[]", started_at=None, completed_at=None)
-        db.add(task); db.flush()
-        result = collect_source(db, task, {"id": source.id, "name": source.name,
-            "base_url": source.base_url, "config": raw_config})
+        source = Source(
+            name="统计测试来源",
+            base_url="https://example.com",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            started_at=None,
+            completed_at=None,
+        )
+        db.add(task)
+        db.flush()
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
         assert result == (1, 0, 0, 2, 1, 0)
         assert task.fetched_count == 1
         assert task.deduplicated_count == 0
         assert task.failed_count == 0
-        assert db.scalar(select(func.count(RawArticle.id)).where(RawArticle.task_id == task.id)) == 1
+        assert (
+            db.scalar(
+                select(func.count(RawArticle.id)).where(RawArticle.task_id == task.id)
+            )
+            == 1
+        )
+        stored = db.scalar(select(RawArticle).where(RawArticle.task_id == task.id))
+        assert stored.source_item_key == stored.canonical_url
+        assert stored.content_kind == "article"
+        assert stored.raw_payload_json == "{}"
+
+
+def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
+    class FakeDokobotClient:
+        def search(self, query, *, num):
+            assert "after:2026-08-20" in query
+            assert num == 10
+            return [
+                DokobotSearchItem(
+                    title="搜索结果标题", link="https://news.example.com/project"
+                )
+            ]
+
+        def read(self, url):
+            assert url == "https://news.example.com/project"
+            return DokobotPage(
+                title="先进封装项目开工",
+                url=url,
+                text="2026年8月21日，某公司先进封装项目正式开工，计划建设多条生产线。"
+                * 5,
+            )
+
+    captured = {}
+
+    def fake_structure(db, article, setting, *, source_name=None):
+        captured.update(
+            article=article, source_name=source_name, model=setting.model_name
+        )
+        article.status = "completed"
+        article.model_name = setting.model_name
+        return 1
+
+    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.structure_article", fake_structure)
+    raw_config = {
+        "type": "web_search",
+        "query": "先进封装开工",
+        "source_hint": "",
+        "max_results": 10,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="Dokobot测试",
+            base_url="https://dokobot.ai",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
+
+        assert result == (1, 0, 0, 1, 0, 0)
+        assert captured["article"].body.startswith("2026年8月21日")
+        assert captured["source_name"] == "news.example.com"
+        assert captured["model"] == "test-model"
 
 
 def test_keyword_values_use_cell_values_and_ignore_column_names():
-    result = keyword_values([{"industry": "新型显示", "field": "Micro LED", "keywords": "AR设备、VR设备"}])
+    result = keyword_values(
+        [{"industry": "新型显示", "field": "Micro LED", "keywords": "AR设备、VR设备"}]
+    )
     assert result == ["新型显示", "micro led", "ar设备", "vr设备"]
     assert "industry" not in result
 

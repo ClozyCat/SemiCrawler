@@ -32,13 +32,28 @@ def get_db():
 def migrate_legacy_database() -> None:
     """Add post-v0.1 audit columns without requiring a migration CLI for local installs."""
     additions = {
-        "raw_articles": {"model_name": "VARCHAR(200)", "llm_output": "TEXT"},
-        "structured_records": {
-            "amount_value": "VARCHAR(100)", "amount_currency": "VARCHAR(30)",
-            "amount_unit": "VARCHAR(30)", "amount_note": "VARCHAR(200)",
+        "raw_articles": {
+            "source_item_key": "VARCHAR(1000) DEFAULT ''",
+            "content_kind": "VARCHAR(30) DEFAULT 'article'",
+            "raw_payload_json": "TEXT DEFAULT '{}'",
+            "model_name": "VARCHAR(200)",
+            "llm_output": "TEXT",
         },
-        "model_settings": {"keyword_config_json": "TEXT DEFAULT '[]'", "keyword_filter_enabled": "BOOLEAN DEFAULT 0"},
-        "collection_tasks": {"keyword_filter_enabled": "BOOLEAN DEFAULT 0", "auto_structure_enabled": "BOOLEAN DEFAULT 0", "keyword_config_json": "TEXT DEFAULT '[]'"},
+        "structured_records": {
+            "amount_value": "VARCHAR(100)",
+            "amount_currency": "VARCHAR(30)",
+            "amount_unit": "VARCHAR(30)",
+            "amount_note": "VARCHAR(200)",
+        },
+        "model_settings": {
+            "keyword_config_json": "TEXT DEFAULT '[]'",
+            "keyword_filter_enabled": "BOOLEAN DEFAULT 0",
+        },
+        "collection_tasks": {
+            "keyword_filter_enabled": "BOOLEAN DEFAULT 0",
+            "auto_structure_enabled": "BOOLEAN DEFAULT 0",
+            "keyword_config_json": "TEXT DEFAULT '[]'",
+        },
     }
     with engine.begin() as connection:
         inspector = inspect(connection)
@@ -48,13 +63,25 @@ def migrate_legacy_database() -> None:
             existing = {column["name"] for column in inspector.get_columns(table)}
             for name, sql_type in columns.items():
                 if name not in existing:
-                    connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}"))
+                    connection.execute(
+                        text(f"ALTER TABLE {table} ADD COLUMN {name} {sql_type}")
+                    )
+        if "raw_articles" in inspector.get_table_names():
+            connection.execute(
+                text("""
+                UPDATE raw_articles
+                SET source_item_key = canonical_url
+                WHERE source_item_key IS NULL OR source_item_key = ''
+            """)
+            )
         tables = set(inspector.get_table_names())
         if {"collection_tasks", "raw_articles"}.issubset(tables):
             # Older versions counted discovered links as fetched articles. The UI now reports persisted raw articles.
-            connection.execute(text("""
+            connection.execute(
+                text("""
                 UPDATE collection_tasks
                 SET fetched_count = (
                     SELECT COUNT(*) FROM raw_articles WHERE raw_articles.task_id = collection_tasks.id
                 )
-            """))
+            """)
+            )

@@ -90,7 +90,7 @@ def test_luowei_extracts_official_zone_name_and_alias():
     assert organization == "北京经济技术开发区（亦庄）"
 
 
-def test_qwen_web_search_uses_enable_search_in_compatible_request(monkeypatch, capsys):
+def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
     captured = {}
 
     class Response:
@@ -106,24 +106,49 @@ def test_qwen_web_search_uses_enable_search_in_compatible_request(monkeypatch, c
 
     monkeypatch.setattr("app.llm.httpx.post", fake_post)
     setting = ModelSetting(
-        base_url="https://dashscope.aliyuncs.com/compatible-mode/v1",
-        model_name="qwen3-max",
+        base_url="https://api.example.com/v1",
+        model_name="test-model",
         api_key="test-key",
     )
-    assert _call(setting, [{"role": "user", "content": "test"}], enable_search=True) == '{"items": []}'
-    assert captured["url"].endswith("/compatible-mode/v1/chat/completions")
-    assert captured["json"]["enable_search"] is True
-    assert captured["json"]["search_options"] == {
-        "forced_search": True,
-        "search_strategy": "max",
+    assert _call(setting, [{"role": "user", "content": "test"}]) == '{"items": []}'
+    assert captured["url"].endswith("/v1/chat/completions")
+    assert set(captured["json"]) == {
+        "model", "messages", "temperature", "response_format", "max_tokens",
     }
-    assert captured["json"]["model"] == "qwen3-max"
+    assert captured["json"]["model"] == "test-model"
+    assert captured["json"]["max_tokens"] == 16384
     debug_output = capsys.readouterr().out
     assert "LLM REQUEST" in debug_output
     assert "LLM RESPONSE" in debug_output
     assert "LLM FINAL CONTENT" in debug_output
-    assert "qwen3-max" in debug_output
+    assert "test-model" in debug_output
     assert "test-key" not in debug_output
+
+
+def test_deepseek_v4_request_uses_low_reasoning_effort(monkeypatch):
+    captured = {}
+
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {"choices": [{"message": {"content": '{"records": []}'}, "finish_reason": "stop"}]}
+
+    def fake_post(url, **kwargs):
+        captured.update(url=url, **kwargs)
+        return Response()
+
+    monkeypatch.setattr("app.llm.httpx.post", fake_post)
+    setting = ModelSetting(
+        base_url="https://api.deepseek.com",
+        model_name="deepseek-v4-flash",
+        api_key="test-key",
+    )
+
+    assert _call(setting, [{"role": "user", "content": "test"}]) == '{"records": []}'
+    assert captured["json"]["max_tokens"] == 16384
+    assert captured["json"]["reasoning_effort"] == "low"
 
 
 def test_llm_retries_invalid_output_and_marks_low_confidence(monkeypatch):
