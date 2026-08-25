@@ -8,6 +8,7 @@ from app.crawler import (
     discover_listing,
     is_low_value_event_promotion,
     keyword_values,
+    merge_ranked_search_results,
     parse_article,
     run_task,
 )
@@ -151,6 +152,10 @@ def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
         return 1
 
     monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr(
+        "app.crawler.plan_search_queries",
+        lambda setting, topic, **kwargs: [topic],
+    )
     monkeypatch.setattr("app.crawler.structure_article", fake_structure)
     raw_config = {
         "type": "web_search",
@@ -200,6 +205,167 @@ def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
         assert captured["article"].body.startswith("2026年8月21日")
         assert captured["source_name"] == "news.example.com"
         assert captured["model"] == "test-model"
+
+
+def test_web_search_executes_planned_queries_and_merges_results(monkeypatch):
+    searched = []
+
+    class FakeDokobotClient:
+        def search(self, query, *, num):
+            searched.append(query)
+            suffix = "shared" if len(searched) == 1 else "second"
+            return [
+                DokobotSearchItem(
+                    title=f"结果 {suffix}",
+                    link=f"https://news.example.com/{suffix}",
+                ),
+                DokobotSearchItem(
+                    title="公共结果",
+                    link="https://news.example.com/shared",
+                ),
+            ]
+
+        def read(self, url):
+            return DokobotPage(
+                title="先进封装项目正式开工",
+                url=url,
+                text=(f"2026年8月21日，{url} 对应的先进封装项目正式开工并建设生产线。" * 5),
+            )
+
+    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr(
+        "app.crawler.plan_search_queries",
+        lambda setting, topic, **kwargs: ["先进封装 开工", "Chiplet 扩产"],
+    )
+    monkeypatch.setattr(
+        "app.crawler.structure_article",
+        lambda db, article, setting, **kwargs: 1,
+    )
+    raw_config = {
+        "type": "web_search",
+        "query": "先进封装和 Chiplet 项目动态",
+        "source_hint": "",
+        "max_results": 10,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="多查询测试",
+            base_url="https://dokobot.ai",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
+
+        assert result == (2, 0, 0, 2, 0, 0)
+        assert len(searched) == 2
+        assert all("after:2026-08-20" in query for query in searched)
+        logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
+        assert any("LLM 已规划 2 条搜索查询" in log.message for log in logs)
+
+
+def test_merge_ranked_search_results_round_robins_and_deduplicates():
+    def item(path):
+        return DokobotSearchItem(title=path, link=f"https://example.com/{path}")
+
+    shared = item("shared")
+    merged = merge_ranked_search_results(
+        [[item("a1"), shared, item("a3")], [item("b1"), shared, item("b3")]],
+        4,
+    )
+
+    assert [entry.title for entry in merged] == ["a1", "b1", "shared", "a3"]
+
+
+def test_web_search_falls_back_to_original_query_when_planning_fails(monkeypatch):
+    searched = []
+
+    class FakeDokobotClient:
+        def search(self, query, *, num):
+            searched.append(query)
+            return []
+
+    def fail_planning(setting, topic, **kwargs):
+        raise ValueError("invalid plan")
+
+    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.plan_search_queries", fail_planning)
+    raw_config = {
+        "type": "web_search",
+        "query": "先进封装开工",
+        "source_hint": "",
+        "max_results": 10,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="规划回退测试",
+            base_url="https://dokobot.ai",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
+
+        assert result == (0, 0, 0, 0, 0, 0)
+        assert searched == ["先进封装开工 after:2026-08-20"]
+        logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
+        assert any("已回退到原始查询" in log.message for log in logs)
 
 
 def test_keyword_values_use_cell_values_and_ignore_column_names():

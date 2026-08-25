@@ -13,7 +13,7 @@ dokobot_executable="${SEMICRAWLER_DOKOBOT_EXECUTABLE:-dokobot}"
 dokobot_home="${SEMICRAWLER_DOKOBOT_HOME:-$HOME}"
 
 echo "[1/3] FastAPI health"
-curl --fail --silent --show-error http://127.0.0.1:8000/api/health
+curl --fail --silent --show-error http://127.0.0.1:8070/api/health
 echo
 
 echo "[2/3] Dokobot bridge"

@@ -12,11 +12,17 @@ from urllib.robotparser import RobotFileParser
 
 import httpx
 from bs4 import BeautifulSoup
+from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .dokobot import DokobotClient, DokobotError, build_search_query
-from .llm import structure_article, structure_pending
+from .llm import (
+    ModelOutputError,
+    plan_search_queries,
+    structure_article,
+    structure_pending,
+)
 from .models import CollectionTask, ModelSetting, RawArticle, TaskLog, utc_now
 from .source_config import (
     SourceConfig,
@@ -92,6 +98,28 @@ def keyword_groups(config: Any) -> dict[str, list[str]]:
         raw = next((config[key] for key in keys if key in config), [])
         groups[name] = keyword_values(raw if isinstance(raw, list) else [])
     return groups
+
+
+def merge_ranked_search_results(
+    batches: list[list[Any]], limit: int
+) -> list[Any]:
+    """Round-robin ranked result sets so one query cannot crowd out the others."""
+    merged: list[Any] = []
+    seen: set[str] = set()
+    rank = 0
+    while len(merged) < limit and any(rank < len(batch) for batch in batches):
+        for batch in batches:
+            if rank >= len(batch):
+                continue
+            item = batch[rank]
+            key = canonical_url(str(item.link), str(item.link))
+            if key not in seen:
+                seen.add(key)
+                merged.append(item)
+                if len(merged) == limit:
+                    break
+        rank += 1
+    return merged
 
 
 def is_low_value_event_promotion(title: str, body: str) -> bool:
@@ -240,8 +268,64 @@ def collect_web_search_source(
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
 
     client = DokobotClient()
-    search_query = build_search_query(config.query, config.source_hint, task.start_date)
-    results = client.search(search_query, num=config.max_results)
+    try:
+        planned_queries = plan_search_queries(
+            setting,
+            config.query,
+            source_hint=config.source_hint,
+            start_date=task.start_date,
+        )
+    except (
+        ModelOutputError,
+        ValidationError,
+        json.JSONDecodeError,
+        httpx.HTTPError,
+        ValueError,
+    ) as exc:
+        planned_queries = [config.query]
+        db.add(
+            TaskLog(
+                task_id=task.id,
+                level="notice",
+                message=(
+                    "LLM 搜索查询规划失败，已回退到原始查询："
+                    f"{type(exc).__name__}: {str(exc)[:300]}"
+                ),
+            )
+        )
+    db.add(
+        TaskLog(
+            task_id=task.id,
+            message=(
+                f"LLM 已规划 {len(planned_queries)} 条搜索查询："
+                f"{json.dumps(planned_queries, ensure_ascii=False)}"
+            ),
+        )
+    )
+    db.commit()
+
+    result_batches = []
+    search_errors: list[DokobotError] = []
+    for planned_query in planned_queries:
+        ensure_task_active(db, task)
+        search_query = build_search_query(
+            planned_query, config.source_hint, task.start_date
+        )
+        try:
+            result_batches.append(client.search(search_query, num=config.max_results))
+        except DokobotError as exc:
+            search_errors.append(exc)
+            db.add(
+                TaskLog(
+                    task_id=task.id,
+                    level="error",
+                    message=f"Dokobot 查询失败 {planned_query}：{exc}",
+                )
+            )
+            db.commit()
+    if not result_batches and search_errors:
+        raise search_errors[0]
+    results = merge_ranked_search_results(result_batches, config.max_results)
     ensure_task_active(db, task)
     pages = []
     failed = 0
@@ -338,8 +422,11 @@ def collect_web_search_source(
         TaskLog(
             task_id=task.id,
             message=(
-                f"Dokobot 本地联网检索完成 {snapshot['name']}：找到 {len(results)} 篇，读取 {len(pages)} 篇，"
-                f"保存 {saved} 篇、结构化 {structured} 条，日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
+                f"Dokobot 本地联网检索完成 {snapshot['name']}："
+                f"执行 {len(planned_queries)} 条查询，"
+                f"合并找到 {len(results)} 篇，读取 {len(pages)} 篇，"
+                f"保存 {saved} 篇、结构化 {structured} 条，"
+                f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
             ),
         )
     )

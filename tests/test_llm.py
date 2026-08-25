@@ -4,7 +4,12 @@ from datetime import date
 import httpx
 
 from app.database import SessionLocal
-from app.llm import _call, _normalize_region_and_organization, structure_article
+from app.llm import (
+    _call,
+    _normalize_region_and_organization,
+    plan_search_queries,
+    structure_article,
+)
 from app.models import ModelSetting, RawArticle, Source
 
 
@@ -129,6 +134,35 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
     assert "LLM FINAL CONTENT" in debug_output
     assert "test-model" in debug_output
     assert "test-key" not in debug_output
+
+
+def test_search_planner_returns_clean_deduplicated_queries(monkeypatch):
+    monkeypatch.setattr(
+        "app.llm._call",
+        lambda setting, messages: json.dumps(
+            {
+                "queries": [
+                    "  先进封装   项目 开工  ",
+                    "Chiplet 扩产",
+                    "先进封装 项目 开工",
+                ]
+            },
+            ensure_ascii=False,
+        ),
+    )
+    setting = ModelSetting(
+        base_url="https://api.example.com",
+        model_name="test-model",
+        api_key="secret",
+    )
+
+    queries = plan_search_queries(
+        setting,
+        "检索先进封装与 Chiplet 项目动态",
+        start_date=date(2026, 8, 20),
+    )
+
+    assert queries == ["先进封装 项目 开工", "Chiplet 扩产"]
 
 
 def test_deepseek_v4_request_uses_low_reasoning_effort(monkeypatch):

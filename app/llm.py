@@ -62,6 +62,21 @@ class Extraction(BaseModel):
     records: list[ExtractedRecord]
 
 
+class SearchPlan(BaseModel):
+    queries: list[str] = Field(min_length=1, max_length=5)
+
+    @field_validator("queries")
+    @classmethod
+    def clean_queries(cls, values: list[str]) -> list[str]:
+        queries = [" ".join(value.split()) for value in values if value.strip()]
+        queries = list(dict.fromkeys(queries))
+        if not queries:
+            raise ValueError("至少需要一条搜索查询")
+        if any(len(query) > 300 for query in queries):
+            raise ValueError("搜索查询不能超过 300 个字符")
+        return queries
+
+
 class ModelOutputError(ValueError):
     pass
 
@@ -269,6 +284,37 @@ def _json_text(raw: str) -> str:
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0]
     return text
+
+
+def plan_search_queries(
+    setting: ModelSetting,
+    topic: str,
+    *,
+    source_hint: str = "",
+    start_date: date | None = None,
+) -> list[str]:
+    """Turn a search topic into one or more focused search-engine queries."""
+    request = {
+        "topic": topic,
+        "source_hint": source_hint,
+        "start_date": start_date.isoformat() if start_date else None,
+        "schema": SearchPlan.model_json_schema(),
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是搜索查询规划器。判断用户主题是否需要拆成多个互补查询。"
+                "主题已经明确时只返回一条；包含多个技术、事件类型或同义表达，且单条查询可能漏检时，"
+                "拆成最多五条简洁、可直接提交给搜索引擎的查询。查询必须忠于原主题，不得虚构企业、"
+                "地点或项目。不要加入 after、before、site 等搜索运算符，系统会统一追加日期和来源限制。"
+                "只输出符合给定 schema 的 JSON。"
+            ),
+        },
+        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+    ]
+    raw = _call(setting, messages)
+    return SearchPlan.model_validate_json(_json_text(raw)).queries
 
 
 def _public_model_error(exc: Exception) -> str:

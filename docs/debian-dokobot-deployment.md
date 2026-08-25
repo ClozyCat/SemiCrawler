@@ -5,7 +5,7 @@
 ```text
 Nginx :8071
   |-- /            -> /opt/semicrawler/dist
-  `-- /api, /docs  -> FastAPI 127.0.0.1:8000
+  `-- /api, /docs  -> FastAPI 127.0.0.1:8070
 
 FastAPI (用户 semicrawler)
   -> dokobot read --local
@@ -230,7 +230,7 @@ sudo -u semicrawler -H /usr/bin/dokobot read --local \
 sudo systemctl enable --now semicrawler-api.service
 sudo systemctl enable --now nginx
 
-curl --fail http://127.0.0.1:8000/api/health
+curl --fail http://127.0.0.1:8070/api/health
 curl --fail http://127.0.0.1:8071/api/health
 ```
 
