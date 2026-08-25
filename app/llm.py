@@ -65,7 +65,8 @@ class ModelOutputError(ValueError):
     pass
 
 
-MAX_OUTPUT_TOKENS = 16384
+MAX_OUTPUT_TOKENS = 4096
+MODEL_TIMEOUT = httpx.Timeout(connect=10, read=240, write=30, pool=10)
 
 
 SYSTEM_PROMPT = """你是半导体新闻事实抽取器。仅依据原文，不推测。每篇原文最终只能产出一条结构化记录；如果原文同时包含多种资讯类型，也只能输出一条记录，并从给定资讯类型列表中选择优先级最高的一种作为 `info_type`。其余资讯类型的事实要点必须简明概括并合并到这条记录的 `details` 中，不得拆分为多条。无结构化价值则 records 为空。
@@ -228,8 +229,12 @@ def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
     if _uses_deepseek_v4_reasoning_controls(setting):
         payload["reasoning_effort"] = "low"
     _print_llm_debug("LLM REQUEST", {"url": url, "body": payload})
-    response = httpx.post(url, headers={"Authorization": f"Bearer {setting.api_key}"},
-                          json=payload, timeout=60)
+    response = httpx.post(
+        url,
+        headers={"Authorization": f"Bearer {setting.api_key}"},
+        json=payload,
+        timeout=MODEL_TIMEOUT,
+    )
     try:
         response_data = response.json()
     except (ValueError, TypeError):
@@ -349,6 +354,15 @@ def structure_article(
             raw = _call(setting, _messages(article, retry_error))
             result = _parse(raw)
             break
+        except httpx.TimeoutException as exc:
+            # The provider may continue generating and charge for a request after
+            # the client stops waiting, so never issue an automatic timeout retry.
+            public_error = _public_model_error(exc)
+            article.status = "review_required"
+            article.error_message = public_error
+            article.llm_output = raw
+            article.model_name = setting.model_name
+            return 0
         except (ModelOutputError, ValidationError, json.JSONDecodeError, httpx.HTTPError) as exc:
             retry_error = str(exc)[:1000]
             public_error = _public_model_error(exc)

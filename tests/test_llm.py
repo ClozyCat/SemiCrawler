@@ -1,6 +1,8 @@
 import json
 from datetime import date
 
+import httpx
+
 from app.database import SessionLocal
 from app.llm import _call, _normalize_region_and_organization, structure_article
 from app.models import ModelSetting, RawArticle, Source
@@ -116,7 +118,11 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
         "model", "messages", "temperature", "response_format", "max_tokens",
     }
     assert captured["json"]["model"] == "test-model"
-    assert captured["json"]["max_tokens"] == 16384
+    assert captured["json"]["max_tokens"] == 4096
+    assert captured["timeout"].connect == 10
+    assert captured["timeout"].read == 240
+    assert captured["timeout"].write == 30
+    assert captured["timeout"].pool == 10
     debug_output = capsys.readouterr().out
     assert "LLM REQUEST" in debug_output
     assert "LLM RESPONSE" in debug_output
@@ -147,7 +153,7 @@ def test_deepseek_v4_request_uses_low_reasoning_effort(monkeypatch):
     )
 
     assert _call(setting, [{"role": "user", "content": "test"}]) == '{"records": []}'
-    assert captured["json"]["max_tokens"] == 16384
+    assert captured["json"]["max_tokens"] == 4096
     assert captured["json"]["reasoning_effort"] == "low"
 
 
@@ -285,3 +291,27 @@ def test_llm_empty_output_has_readable_error_after_retry(monkeypatch):
         assert article.status == "review_required"
         assert article.error_message == "模型返回了空内容，请检查模型名称、API 额度及接口兼容性（已自动重试）"
         assert "validation error" not in article.error_message
+
+
+def test_llm_timeout_is_not_retried(monkeypatch):
+    calls = 0
+
+    def time_out(setting, messages):
+        nonlocal calls
+        calls += 1
+        raise httpx.ReadTimeout("timed out")
+
+    monkeypatch.setattr("app.llm._call", time_out)
+    with SessionLocal() as db:
+        source = Source(name="超时测试", base_url="https://timeout.example.com", enabled=True, builtin=False, config_json="{}")
+        db.add(source); db.flush()
+        article = RawArticle(source_id=source.id, canonical_url="https://timeout.example.com/a", title="待结构化文章",
+            body="某半导体企业公布了一项具体产业进展。" * 5, content_hash="t" * 64, status="pending")
+        db.add(article); db.commit(); db.refresh(article)
+
+        count = structure_article(db, article, ModelSetting(base_url="https://api.example.com", model_name="mock", api_key="x", enabled=True))
+
+        assert count == 0
+        assert calls == 1
+        assert article.status == "review_required"
+        assert article.error_message == "模型请求超时，请稍后重试"
