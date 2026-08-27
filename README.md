@@ -22,7 +22,7 @@ npm i -g @dokobot/cli@latest
 dokobot install-bridge
 ```
 
-重启浏览器或重新加载扩展后，运行 `dokobot read --local https://dokobot.ai` 可验证本地桥接。添加信息源时选择“联网搜索”，填写自然语言检索主题及可选来源提示；任务会先用 `dokobot read --local` 搜索和读取原文，再用“API配置”中的 OpenAI 兼容模型生成结构化记录。来源提示中填写具体 URL 时会自动转换为 `site:` 范围查询。
+重启浏览器或重新加载扩展后，运行 `dokobot read --local https://dokobot.ai` 可验证本地桥接。添加信息源时选择“联网搜索”，填写自然语言检索主题及可选来源提示；任务会先用 `dokobot read --local` 搜索和读取原文，再用“API配置”中的 OpenAI 兼容模型生成结构化记录。来源提示中的每个 URL 会作为独立的 `site:` 搜索范围；每个规划关键词在每个来源范围内最多读取“查看数量上限”条结果，不设置跨关键词和跨来源的总数上限。任务执行全局串行，Dokobot 接管标签页上限为 5 个，并会复用和清理任务使用的标签页。
 
 Dokobot 本地桥接需要后端进程与浏览器运行在同一台主机。默认 Docker 后端容器无法直接访问宿主机的本地桥接，因此联网搜索请使用上方的本地运行方式；普通网站采集和已保存数据仍可使用 Docker。
 

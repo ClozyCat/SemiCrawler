@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
@@ -72,6 +73,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+_TASK_EXECUTION_LOCK = threading.Lock()
 
 
 def source_read(source: Source) -> SourceRead:
@@ -264,7 +267,7 @@ def create_task(
 
 
 def _run_task_background(task_id: int) -> None:
-    with SessionLocal() as session:
+    with _TASK_EXECUTION_LOCK, SessionLocal() as session:
         task = session.get(CollectionTask, task_id)
         if task:
             try:

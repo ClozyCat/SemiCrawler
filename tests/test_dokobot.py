@@ -8,6 +8,7 @@ from app.dokobot import (
     _decode_output,
     build_search_query,
     parse_search_results,
+    source_hint_variants,
 )
 
 
@@ -19,6 +20,12 @@ def test_search_query_uses_date_and_source_domains():
     )
     assert "after:2026-08-01" in query
     assert "site:gov.cn OR site:example.com" in query
+
+
+def test_source_hint_variants_split_each_url_into_independent_scopes():
+    assert source_hint_variants(
+        "https://example.com/news\nhttps://gov.cn/projects\n优先项目公告"
+    ) == ["https://example.com/news", "https://gov.cn/projects", "优先项目公告"]
 
 
 def test_search_results_extract_direct_and_google_redirect_links():
@@ -197,6 +204,7 @@ def test_client_read_always_uses_free_local_mode(monkeypatch):
     page = DokobotClient(executable="dokobot").read("https://example.com/a")
 
     assert captured["command"][:3] == ["dokobot", "read", "--local"]
+    assert "--reuse-tab" in captured["command"]
     assert "--api-key" not in captured["command"]
     assert "remote" not in captured["command"]
     assert page.title == "示例页面"

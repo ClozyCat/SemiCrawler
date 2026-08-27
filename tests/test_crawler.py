@@ -311,6 +311,93 @@ def test_web_search_executes_five_planned_queries_plus_original_and_merges_resul
         )
 
 
+def test_web_search_runs_each_query_against_each_source_url_without_total_limit(
+    monkeypatch,
+):
+    searched = []
+
+    class FakeDokobotClient:
+        def select_search_engine(self):
+            return "bing"
+
+        def search(self, query, *, num):
+            searched.append((query, num))
+            return [
+                DokobotSearchItem(
+                    title=query,
+                    link=f"https://news.example.com/{len(searched)}",
+                )
+            ]
+
+        def read(self, url):
+            return DokobotPage(
+                title="项目动态",
+                url=url,
+                text="2026年8月21日，先进封装项目正式开工并建设生产线。" * 5,
+            )
+
+    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr(
+        "app.crawler.plan_search_queries",
+        lambda setting, topic, **kwargs: ["关键词一", "关键词二"],
+    )
+    monkeypatch.setattr(
+        "app.crawler.structure_article",
+        lambda db, article, setting, **kwargs: 1,
+    )
+    raw_config = {
+        "type": "web_search",
+        "query": "原始关键词",
+        "source_hint": "https://one.example/news\nhttps://two.example/projects",
+        "max_results": 100,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="逐网址测试",
+            base_url="https://dokobot.ai",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
+
+    assert len(searched) == 6
+    assert all(num == 100 for _, num in searched)
+    assert sum("site:one.example" in query for query, _ in searched) == 3
+    assert sum("site:two.example" in query for query, _ in searched) == 3
+    assert result[3] == 6
+    assert result[0] == 1
+    assert result[1] == 5
+
+
 def test_merge_ranked_search_results_round_robins_and_deduplicates():
     def item(path):
         return DokobotSearchItem(title=path, link=f"https://example.com/{path}")

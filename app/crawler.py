@@ -16,7 +16,12 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .dokobot import DokobotClient, DokobotError, build_search_query
+from .dokobot import (
+    DokobotClient,
+    DokobotError,
+    build_search_query,
+    source_hint_variants,
+)
 from .llm import (
     ModelOutputError,
     plan_search_queries,
@@ -101,13 +106,15 @@ def keyword_groups(config: Any) -> dict[str, list[str]]:
 
 
 def merge_ranked_search_results(
-    batches: list[list[Any]], limit: int
+    batches: list[list[Any]], limit: int | None = None
 ) -> list[Any]:
     """Round-robin ranked result sets so one query cannot crowd out the others."""
     merged: list[Any] = []
     seen: set[str] = set()
     rank = 0
-    while len(merged) < limit and any(rank < len(batch) for batch in batches):
+    while (limit is None or len(merged) < limit) and any(
+        rank < len(batch) for batch in batches
+    ):
         for batch in batches:
             if rank >= len(batch):
                 continue
@@ -116,7 +123,7 @@ def merge_ranked_search_results(
             if key not in seen:
                 seen.add(key)
                 merged.append(item)
-                if len(merged) == limit:
+                if limit is not None and len(merged) == limit:
                     break
         rank += 1
     return merged
@@ -268,6 +275,9 @@ def collect_web_search_source(
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
 
     client = DokobotClient()
+    close_stale_sessions = getattr(client, "close_stale_sessions", None)
+    if close_stale_sessions:
+        close_stale_sessions()
     search_engine = client.select_search_engine()
     db.add(
         TaskLog(
@@ -321,13 +331,17 @@ def collect_web_search_source(
     )
     db.commit()
 
+    source_variants = source_hint_variants(config.source_hint)
+    search_specs = [
+        (planned_query, source_hint)
+        for planned_query in planned_queries
+        for source_hint in source_variants
+    ]
     result_batches = []
     search_errors: list[DokobotError] = []
-    for planned_query in planned_queries:
+    for planned_query, source_hint in search_specs:
         ensure_task_active(db, task)
-        search_query = build_search_query(
-            planned_query, config.source_hint, task.start_date
-        )
+        search_query = build_search_query(planned_query, source_hint, task.start_date)
         try:
             result_batches.append(client.search(search_query, num=config.max_results))
         except DokobotError as exc:
@@ -336,20 +350,22 @@ def collect_web_search_source(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Dokobot 查询失败 {planned_query}：{exc}",
+                    message=f"Dokobot 查询失败 {search_query}：{exc}",
                 )
             )
             db.commit()
     if not result_batches and search_errors:
         raise search_errors[0]
-    results = merge_ranked_search_results(result_batches, config.max_results)
+    results = merge_ranked_search_results(result_batches)
     ensure_task_active(db, task)
     pages = []
     failed = 0
     for search_item in results:
         ensure_task_active(db, task)
+        page = None
         try:
-            pages.append((search_item, client.read(str(search_item.link))))
+            page = client.read(str(search_item.link))
+            pages.append((search_item, page))
             ensure_task_active(db, task)
         except DokobotError as exc:
             failed += 1
@@ -361,6 +377,14 @@ def collect_web_search_source(
                 )
             )
             db.commit()
+        finally:
+            if page:
+                try:
+                    close_session = getattr(client, "close_session", None)
+                    if close_session:
+                        close_session(page.session_id)
+                except DokobotError:
+                    pass
 
     configured = json.loads(task.keyword_config_json or "[]")
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
@@ -440,7 +464,8 @@ def collect_web_search_source(
             task_id=task.id,
             message=(
                 f"Dokobot 本地联网检索完成 {snapshot['name']}："
-                f"执行 {len(planned_queries)} 条查询，"
+                f"执行 {len(search_specs)} 条搜索查询（{len(planned_queries)} 个关键词 × "
+                f"{len(source_variants)} 个来源范围），"
                 f"合并找到 {len(results)} 篇，读取 {len(pages)} 篇，"
                 f"保存 {saved} 篇、结构化 {structured} 条，"
                 f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"

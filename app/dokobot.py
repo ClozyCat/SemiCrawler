@@ -6,6 +6,7 @@ import shutil
 import subprocess
 import threading
 import time
+from collections import deque
 from datetime import date
 from locale import getpreferredencoding
 from pathlib import Path
@@ -28,6 +29,7 @@ class DokobotPage(BaseModel):
     title: str = ""
     url: HttpUrl
     text: str = Field(min_length=1)
+    session_id: str | None = None
 
 
 _URL_RE = re.compile(r"https?://[^\s<>\"'）】]+")
@@ -41,6 +43,9 @@ _SEARCH_HOSTS = {
     "www.bing.com",
 }
 _CLI_LOCK = threading.Lock()
+_SESSION_LOCK = threading.Lock()
+_ACTIVE_SESSIONS: deque[str] = deque()
+MAX_DOKOBOT_TABS = 5
 _SEARCH_ENGINE_HOME = {
     "google": "https://www.google.com/",
     "bing": "https://www.bing.com/",
@@ -64,6 +69,25 @@ def build_search_query(query: str, source_hint: str, start_date: date) -> str:
     elif source_hint.strip():
         parts.append(source_hint.strip())
     return " ".join(parts)
+
+
+def source_hint_variants(source_hint: str) -> list[str]:
+    """Split URL source hints so each URL becomes an independent search scope."""
+    variants: list[str] = []
+    for line in source_hint.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        matches = re.findall(
+            r"https?://[^\s<>\"'）】]+|(?<![@\w])(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+",
+            line,
+            re.IGNORECASE,
+        )
+        if matches:
+            variants.extend(item.rstrip(".,;:!?，。；：！？)]}") for item in matches)
+        else:
+            variants.append(line)
+    return list(dict.fromkeys(variant for variant in variants if variant)) or [""]
 
 
 def _result_url(raw_url: str) -> str | None:
@@ -233,7 +257,7 @@ class DokobotClient:
         return completed
 
     def read(self, url: str, *, screens: int | None = None) -> DokobotPage:
-        args = ["read", "--local", url, "--timeout", "90"]
+        args = ["read", "--local", "--reuse-tab", url, "--timeout", "90"]
         if screens is not None:
             args.extend(["--screens", str(screens)])
         last_error: DokobotError | None = None
@@ -260,20 +284,71 @@ class DokobotClient:
             page_url = lines[body_start].removeprefix("> ").strip() or url
             body_start += 1
         body = "\n".join(lines[body_start:]).strip()
+        session_match = re.search(
+            r"(?:Session|sessionId)[:=]\s*([^\s)]+)",
+            _decode_output(completed.stderr),
+        )
+        session_id = session_match.group(1) if session_match else None
         try:
-            return DokobotPage(title=title, url=page_url, text=body)
+            page = DokobotPage(
+                title=title, url=page_url, text=body, session_id=session_id
+            )
         except ValidationError as exc:
             raise DokobotError("Dokobot 未能从页面提取有效正文") from exc
+        if page.session_id:
+            with _SESSION_LOCK:
+                has_capacity = len(_ACTIVE_SESSIONS) < MAX_DOKOBOT_TABS
+            if not has_capacity:
+                self.close_stale_sessions()
+                with _SESSION_LOCK:
+                    has_capacity = len(_ACTIVE_SESSIONS) < MAX_DOKOBOT_TABS
+                if not has_capacity:
+                    try:
+                        self.close_session(page.session_id)
+                    except DokobotError:
+                        pass
+                    raise DokobotError(
+                        f"Dokobot 接管标签页已达到上限（{MAX_DOKOBOT_TABS} 个）"
+                    )
+            with _SESSION_LOCK:
+                _ACTIVE_SESSIONS.append(page.session_id)
+        return page
+
+    def close_session(self, session_id: str | None) -> None:
+        if not session_id:
+            return
+        self._command("close", session_id, timeout=30)
+        with _SESSION_LOCK:
+            try:
+                _ACTIVE_SESSIONS.remove(session_id)
+            except ValueError:
+                pass
+
+    def close_stale_sessions(self) -> None:
+        with _SESSION_LOCK:
+            sessions = list(dict.fromkeys(_ACTIVE_SESSIONS))
+        for session_id in sessions:
+            try:
+                self.close_session(session_id)
+            except DokobotError:
+                continue
 
     def select_search_engine(self) -> str:
         """Select the first search engine reachable through the local browser."""
         errors: list[str] = []
         for engine in ("bing", "google"):
+            page: DokobotPage | None = None
             try:
-                self.read(_SEARCH_ENGINE_HOME[engine], screens=1)
+                page = self.read(_SEARCH_ENGINE_HOME[engine], screens=1)
             except DokobotError as exc:
                 errors.append(f"{engine}: {exc}")
                 continue
+            finally:
+                if page:
+                    try:
+                        self.close_session(page.session_id)
+                    except DokobotError:
+                        pass
             self.search_engine = engine
             return engine
         detail = "; ".join(errors)
@@ -304,11 +379,18 @@ class DokobotClient:
         seen: set[str] = set()
         offset = 0
         while len(results) < limit and offset < 1000:
+            page: DokobotPage | None = None
             try:
                 page = self.read(build_url(offset), screens=3)
             except DokobotError as exc:
                 last_error = exc
                 break
+            finally:
+                if page:
+                    try:
+                        self.close_session(page.session_id)
+                    except DokobotError:
+                        pass
 
             page_results = parse_search_results(page.text, limit=page_size)
             new_results = [item for item in page_results if str(item.link) not in seen]
