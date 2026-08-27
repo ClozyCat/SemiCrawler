@@ -48,7 +48,7 @@ _SEARCH_ENGINE_HOME = {
 
 
 def build_search_query(query: str, source_hint: str, start_date: date) -> str:
-    """Translate the source form into operators understood by Google search."""
+    """Translate the source form into operators understood by web search engines."""
     parts = [query.strip(), f"after:{start_date.isoformat()}"]
     domains = [
         host.lower()
@@ -171,7 +171,7 @@ class DokobotClient:
             executable or configured_executable or shutil.which("dokobot") or ""
         )
         self.home = os.getenv("SEMICRAWLER_DOKOBOT_HOME", "").strip()
-        self.search_engine = "google"
+        self.search_engine = "bing"
         if not self.executable:
             raise DokobotError(
                 "未找到 Dokobot CLI，请先安装 @dokobot/cli "
@@ -268,7 +268,7 @@ class DokobotClient:
     def select_search_engine(self) -> str:
         """Select the first search engine reachable through the local browser."""
         errors: list[str] = []
-        for engine in ("google", "bing"):
+        for engine in ("bing", "google"):
             try:
                 self.read(_SEARCH_ENGINE_HOME[engine], screens=1)
             except DokobotError as exc:
@@ -278,7 +278,7 @@ class DokobotClient:
             return engine
         detail = "; ".join(errors)
         raise DokobotError(
-            "Google 和 Bing 均无法连接，已跳过联网搜索任务"
+            "Bing 和 Google 均无法连接，已跳过联网搜索任务"
             + (f"：{detail}" if detail else "")
         )
 
