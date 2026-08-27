@@ -290,7 +290,7 @@ def collect_web_search_source(
         httpx.HTTPError,
         ValueError,
     ) as exc:
-        planned_queries = [config.query]
+        planned_queries = []
         db.add(
             TaskLog(
                 task_id=task.id,
@@ -301,11 +301,20 @@ def collect_web_search_source(
                 ),
             )
         )
+    original_query_key = " ".join(config.query.split()).casefold()
+    planned_queries = [
+        query
+        for query in planned_queries[:5]
+        if " ".join(query.split()).casefold() != original_query_key
+    ]
+    llm_query_count = len(planned_queries)
+    planned_queries.append(config.query)
     db.add(
         TaskLog(
             task_id=task.id,
             message=(
-                f"LLM 已规划 {len(planned_queries)} 条搜索查询："
+                f"本次将执行 {len(planned_queries)} 条搜索查询"
+                f"（{llm_query_count} 条 LLM 规划查询 + 1 条原始查询）："
                 f"{json.dumps(planned_queries, ensure_ascii=False)}"
             ),
         )

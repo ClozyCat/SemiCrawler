@@ -210,7 +210,9 @@ def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
         assert captured["model"] == "test-model"
 
 
-def test_web_search_executes_planned_queries_and_merges_results(monkeypatch):
+def test_web_search_executes_five_planned_queries_plus_original_and_merges_results(
+    monkeypatch,
+):
     searched = []
 
     class FakeDokobotClient:
@@ -241,7 +243,13 @@ def test_web_search_executes_planned_queries_and_merges_results(monkeypatch):
     monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
     monkeypatch.setattr(
         "app.crawler.plan_search_queries",
-        lambda setting, topic, **kwargs: ["先进封装 开工", "Chiplet 扩产"],
+        lambda setting, topic, **kwargs: [
+            "先进封装 开工",
+            "Chiplet 扩产",
+            "半导体 项目 签约",
+            "先进封装 项目 投产",
+            "Chiplet 项目 建设",
+        ],
     )
     monkeypatch.setattr(
         "app.crawler.structure_article",
@@ -292,10 +300,15 @@ def test_web_search_executes_planned_queries_and_merges_results(monkeypatch):
         )
 
         assert result == (2, 0, 0, 2, 0, 0)
-        assert len(searched) == 2
+        assert len(searched) == 6
+        assert searched[-1] == "先进封装和 Chiplet 项目动态 after:2026-08-20"
         assert all("after:2026-08-20" in query for query in searched)
         logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
-        assert any("LLM 已规划 2 条搜索查询" in log.message for log in logs)
+        assert any(
+            "本次将执行 6 条搜索查询（5 条 LLM 规划查询 + 1 条原始查询）"
+            in log.message
+            for log in logs
+        )
 
 
 def test_merge_ranked_search_results_round_robins_and_deduplicates():
