@@ -209,11 +209,28 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
 
 function Dashboard({ meta, sources, tasks, records, articles, keywordSetting, onCreateTask, creating, onAddSource, onLogs, onTerminate, stoppingIds, onDetail, onHistory, onError }) {
   const [selected, setSelected] = useState([])
+  const sourceSelectionInitialized = useRef(false)
+  const previousEnabledSourceIds = useRef(new Set())
   const [startDate, setStartDate] = useState(meta.default_start_date || DEFAULT_DATE)
   // Both task options are enabled by default; users can opt out per task.
   const [keywordFilter, setKeywordFilter] = useState(true)
   const [autoStructure, setAutoStructure] = useState(true)
-  useEffect(() => { setSelected(sources.filter((source) => source.enabled).map((source) => source.id)) }, [sources])
+  useEffect(() => {
+    const enabledIds = sources.filter((source) => source.enabled).map((source) => source.id)
+    const enabledSet = new Set(enabledIds)
+    if (!sourceSelectionInitialized.current) {
+      sourceSelectionInitialized.current = true
+      previousEnabledSourceIds.current = enabledSet
+      setSelected(enabledIds)
+      return
+    }
+    const newlyEnabled = enabledIds.filter((id) => !previousEnabledSourceIds.current.has(id))
+    previousEnabledSourceIds.current = enabledSet
+    setSelected((old) => {
+      const next = [...old.filter((id) => enabledSet.has(id)), ...newlyEnabled.filter((id) => !old.includes(id))]
+      return next.length === old.length && next.every((id, index) => id === old[index]) ? old : next
+    })
+  }, [sources])
   useEffect(() => { setStartDate(meta.default_start_date || DEFAULT_DATE) }, [meta.default_start_date])
   const toggle = (id) => setSelected((old) => old.includes(id) ? old.filter((item) => item !== id) : [...old, id])
   return <>
