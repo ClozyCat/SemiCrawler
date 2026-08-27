@@ -685,6 +685,7 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
         enabled=setting.enabled,
         has_api_key=bool(setting.api_key),
         api_key_hint=hint,
+        request_headers=json.loads(setting.request_headers_json or "[]"),
         keyword_config=json.loads(setting.keyword_config_json or "[]"),
         keyword_filter_enabled=bool(setting.keyword_filter_enabled),
     )
@@ -707,6 +708,11 @@ def update_model_setting(payload: ModelSettingUpdate, db: Session = Depends(get_
     setting.base_url = str(payload.base_url).rstrip("/")
     setting.model_name = payload.model_name
     setting.enabled = payload.enabled
+    if payload.request_headers is not None:
+        setting.request_headers_json = json.dumps(
+            [header.model_dump() for header in payload.request_headers],
+            ensure_ascii=False,
+        )
     setting.keyword_config_json = json.dumps(payload.keyword_config, ensure_ascii=False)
     setting.keyword_filter_enabled = payload.keyword_filter_enabled
     if payload.api_key is not None and payload.api_key.strip():

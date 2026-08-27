@@ -244,10 +244,19 @@ def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
     }
     if _uses_deepseek_v4_reasoning_controls(setting):
         payload["reasoning_effort"] = "low"
+    headers = {"Authorization": f"Bearer {setting.api_key}"}
+    for header in json.loads(setting.request_headers_json or "[]"):
+        key = header["key"]
+        existing_key = next(
+            (name for name in headers if name.casefold() == key.casefold()), None
+        )
+        if existing_key is not None:
+            del headers[existing_key]
+        headers[key] = header["value"]
     _print_llm_debug("LLM REQUEST", {"url": url, "body": payload})
     response = httpx.post(
         url,
-        headers={"Authorization": f"Bearer {setting.api_key}"},
+        headers=headers,
         json=payload,
         timeout=MODEL_TIMEOUT,
     )
@@ -260,8 +269,15 @@ def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
         "body": response_data,
     })
     response.raise_for_status()
+    completion_data = response_data
+    if (
+        isinstance(response_data, dict)
+        and "choices" not in response_data
+        and isinstance(response_data.get("data"), dict)
+    ):
+        completion_data = response_data["data"]
     try:
-        choice = response_data["choices"][0]
+        choice = completion_data["choices"][0]
         content = choice["message"]["content"]
     except (KeyError, IndexError, TypeError) as exc:
         raise ModelOutputError("模型接口响应中缺少消息内容") from exc

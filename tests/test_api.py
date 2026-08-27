@@ -450,14 +450,35 @@ def test_model_setting_masks_secret(client):
             "base_url": "https://api.example.com",
             "model_name": "test-model",
             "api_key": "sk-secret1234",
+            "request_headers": [
+                {"key": "X-API-Version", "value": "2026-08-01"},
+            ],
             "enabled": True,
         },
     )
     assert response.status_code == 200
     assert response.json()["has_api_key"] is True
     assert response.json()["api_key_hint"].endswith("1234")
+    assert response.json()["request_headers"] == [
+        {"key": "X-API-Version", "value": "2026-08-01"},
+    ]
     assert "secret" not in response.text
     assert "api_key" not in client.get("/api/settings/model").json()
+
+
+def test_model_setting_rejects_duplicate_request_headers(client):
+    response = client.put(
+        "/api/settings/model",
+        json={
+            "base_url": "https://api.example.com",
+            "model_name": "test-model",
+            "request_headers": [
+                {"key": "X-Tenant", "value": "first"},
+                {"key": "x-tenant", "value": "second"},
+            ],
+        },
+    )
+    assert response.status_code == 422
 
 
 def test_background_task_rolls_back_before_recording_failure(client, monkeypatch):

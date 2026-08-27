@@ -52,6 +52,7 @@ class ModelSetting(Base):
     )
     model_name: Mapped[str] = mapped_column(String(200), default="qwen3-max")
     api_key: Mapped[str] = mapped_column(Text, default="")
+    request_headers_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     keyword_config_json: Mapped[str] = mapped_column(Text, default="[]")
     keyword_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=False)

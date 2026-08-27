@@ -116,6 +116,12 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
         base_url="https://api.example.com/v1",
         model_name="test-model",
         api_key="test-key",
+        request_headers_json=json.dumps(
+            [
+                {"key": "X-API-Version", "value": "2026-08-01"},
+                {"key": "authorization", "value": "Custom test-authorization"},
+            ]
+        ),
     )
     assert _call(setting, [{"role": "user", "content": "test"}]) == '{"items": []}'
     assert captured["url"].endswith("/v1/chat/completions")
@@ -124,6 +130,10 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
     }
     assert captured["json"]["model"] == "test-model"
     assert captured["json"]["max_tokens"] == 4096
+    assert captured["headers"] == {
+        "X-API-Version": "2026-08-01",
+        "authorization": "Custom test-authorization",
+    }
     assert captured["timeout"].connect == 10
     assert captured["timeout"].read == 240
     assert captured["timeout"].write == 30
@@ -134,6 +144,38 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
     assert "LLM FINAL CONTENT" in debug_output
     assert "test-model" in debug_output
     assert "test-key" not in debug_output
+
+
+def test_model_response_accepts_data_wrapped_chat_completion(monkeypatch):
+    class Response:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "data": {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": '{"queries": ["江苏 半导体 项目"]}'
+                            },
+                            "finish_reason": "stop",
+                        }
+                    ]
+                },
+                "success": True,
+            }
+
+    monkeypatch.setattr("app.llm.httpx.post", lambda *args, **kwargs: Response())
+    setting = ModelSetting(
+        base_url="https://api.example.com/v1",
+        model_name="wrapped-model",
+        api_key="test-key",
+    )
+
+    assert _call(setting, [{"role": "user", "content": "test"}]) == (
+        '{"queries": ["江苏 半导体 项目"]}'
+    )
 
 
 def test_search_planner_returns_clean_deduplicated_queries(monkeypatch):

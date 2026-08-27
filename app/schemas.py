@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from datetime import UTC, date, datetime, timedelta, timezone
 from typing import Any
 
@@ -211,13 +212,46 @@ class AppMeta(BaseModel):
     phase: int = 4
 
 
+class RequestHeaderSetting(BaseModel):
+    key: str = Field(min_length=1, max_length=200)
+    value: str = Field(max_length=4000)
+
+    @field_validator("key")
+    @classmethod
+    def valid_key(cls, value: str) -> str:
+        key = value.strip()
+        if not key or not re.fullmatch(r"[!#$%&'*+.^_`|~0-9A-Za-z-]+", key):
+            raise ValueError("请求头名称格式无效")
+        return key
+
+    @field_validator("value")
+    @classmethod
+    def valid_value(cls, value: str) -> str:
+        if "\r" in value or "\n" in value:
+            raise ValueError("请求头值不能包含换行符")
+        return value
+
+
 class ModelSettingUpdate(BaseModel):
     base_url: HttpUrl
     model_name: str = Field(min_length=1, max_length=200)
     api_key: str | None = None
+    request_headers: list[RequestHeaderSetting] | None = None
     enabled: bool = False
     keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False
+
+    @field_validator("request_headers")
+    @classmethod
+    def unique_request_headers(
+        cls, value: list[RequestHeaderSetting] | None
+    ) -> list[RequestHeaderSetting] | None:
+        if value is None:
+            return value
+        keys = [header.key.casefold() for header in value]
+        if len(keys) != len(set(keys)):
+            raise ValueError("请求头名称不能重复")
+        return value
 
 
 class ModelSettingRead(BaseModel):
@@ -226,5 +260,6 @@ class ModelSettingRead(BaseModel):
     enabled: bool
     has_api_key: bool
     api_key_hint: str
+    request_headers: list[RequestHeaderSetting] = Field(default_factory=list)
     keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False
