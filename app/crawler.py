@@ -17,6 +17,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .dokobot import (
+    SEARCH_ENGINE_LABELS,
     DokobotClient,
     DokobotError,
     build_search_query,
@@ -245,6 +246,7 @@ def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
             "type": "web_search",
             "query": config.query,
             "source_hint": config.source_hint,
+            "preferred_search_engine": config.preferred_search_engine,
         }
     listing = fetch_html(config.entry_urls[0], config.request.timeout_seconds)
     links, _ = discover_listing(listing, config.entry_urls[0], config)
@@ -278,11 +280,20 @@ def collect_web_search_source(
     close_stale_sessions = getattr(client, "close_stale_sessions", None)
     if close_stale_sessions:
         close_stale_sessions()
+    client.preferred_search_engine = config.preferred_search_engine
+    client.search_start_date = task.start_date
     search_engine = client.select_search_engine()
+    preferred_label = SEARCH_ENGINE_LABELS[config.preferred_search_engine]
+    selected_label = SEARCH_ENGINE_LABELS[search_engine]
+    engine_message = (
+        f"首选搜索引擎 {preferred_label} 连通性检测通过"
+        if search_engine == config.preferred_search_engine
+        else f"首选搜索引擎 {preferred_label} 无法连接，已回退至 {selected_label}"
+    )
     db.add(
         TaskLog(
             task_id=task.id,
-            message=f"搜索引擎连通性检测通过，本次联网搜索使用 {search_engine}",
+            message=f"{engine_message}，本次联网搜索使用 {selected_label}",
         )
     )
     db.commit()
@@ -341,7 +352,9 @@ def collect_web_search_source(
     search_errors: list[DokobotError] = []
     for planned_query, source_hint in search_specs:
         ensure_task_active(db, task)
-        search_query = build_search_query(planned_query, source_hint, task.start_date)
+        search_query = build_search_query(
+            planned_query, source_hint, task.start_date, engine=search_engine
+        )
         try:
             result_batches.append(client.search(search_query, num=config.max_results))
         except DokobotError as exc:

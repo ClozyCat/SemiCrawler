@@ -7,7 +7,8 @@ import subprocess
 import threading
 import time
 from collections import deque
-from datetime import date
+from datetime import UTC, date, datetime
+from datetime import time as datetime_time
 from locale import getpreferredencoding
 from pathlib import Path
 from urllib.parse import parse_qs, quote_plus, urlparse
@@ -41,6 +42,12 @@ _SEARCH_HOSTS = {
     "support.google.com",
     "bing.com",
     "www.bing.com",
+    "baidu.com",
+    "www.baidu.com",
+    "sogou.com",
+    "www.sogou.com",
+    "so.com",
+    "www.so.com",
 }
 _CLI_LOCK = threading.Lock()
 _SESSION_LOCK = threading.Lock()
@@ -49,12 +56,50 @@ MAX_DOKOBOT_TABS = 5
 _SEARCH_ENGINE_HOME = {
     "google": "https://www.google.com/",
     "bing": "https://www.bing.com/",
+    "baidu": "https://www.baidu.com/",
+    "sogou": "https://www.sogou.com/",
+    "so360": "https://www.so.com/",
 }
+SEARCH_ENGINE_LABELS = {
+    "google": "Google",
+    "bing": "Bing",
+    "baidu": "百度",
+    "sogou": "搜狗",
+    "so360": "360 搜索",
+}
+SEARCH_ENGINE_FALLBACK_ORDER = ("google", "bing", "baidu", "sogou", "so360")
+DEFAULT_SEARCH_ENGINE = "google"
 
 
-def build_search_query(query: str, source_hint: str, start_date: date) -> str:
+def _effective_start_date(query: str, start_date: date) -> date:
+    dates = [start_date]
+    for raw_date in re.findall(
+        r"(?<!\w)after:(\d{4}-\d{2}-\d{2})", query, re.IGNORECASE
+    ):
+        try:
+            dates.append(date.fromisoformat(raw_date))
+        except ValueError:
+            continue
+    return max(dates)
+
+
+def build_search_query(
+    query: str,
+    source_hint: str,
+    start_date: date,
+    *,
+    engine: str = DEFAULT_SEARCH_ENGINE,
+) -> str:
     """Translate the source form into operators understood by web search engines."""
-    parts = [query.strip(), f"after:{start_date.isoformat()}"]
+    if engine not in SEARCH_ENGINE_LABELS:
+        raise DokobotError(f"不支持的搜索引擎：{engine}")
+    effective_start = _effective_start_date(query, start_date)
+    clean_query = re.sub(
+        r"(?<!\w)after:\d{4}-\d{2}-\d{2}", "", query, flags=re.IGNORECASE
+    )
+    parts = [" ".join(clean_query.split())]
+    if engine == "google":
+        parts.append(f"after:{effective_start.isoformat()}")
     domains = [
         host.lower()
         for host in re.findall(
@@ -68,7 +113,7 @@ def build_search_query(query: str, source_hint: str, start_date: date) -> str:
         parts.append(f"({sites})")
     elif source_hint.strip():
         parts.append(source_hint.strip())
-    return " ".join(parts)
+    return " ".join(part for part in parts if part)
 
 
 def source_hint_variants(source_hint: str) -> list[str]:
@@ -195,7 +240,9 @@ class DokobotClient:
             executable or configured_executable or shutil.which("dokobot") or ""
         )
         self.home = os.getenv("SEMICRAWLER_DOKOBOT_HOME", "").strip()
-        self.search_engine = "bing"
+        self.search_engine = DEFAULT_SEARCH_ENGINE
+        self.preferred_search_engine = DEFAULT_SEARCH_ENGINE
+        self.search_start_date: date | None = None
         if not self.executable:
             raise DokobotError(
                 "未找到 Dokobot CLI，请先安装 @dokobot/cli "
@@ -333,10 +380,17 @@ class DokobotClient:
             except DokobotError:
                 continue
 
-    def select_search_engine(self) -> str:
-        """Select the first search engine reachable through the local browser."""
+    def select_search_engine(self, preferred: str | None = None) -> str:
+        """Use the preferred engine, falling back only when it is unreachable."""
+        preferred = preferred or self.preferred_search_engine
+        if preferred not in SEARCH_ENGINE_LABELS:
+            raise DokobotError(f"不支持的搜索引擎：{preferred}")
         errors: list[str] = []
-        for engine in ("bing", "google"):
+        candidates = (
+            preferred,
+            *(item for item in SEARCH_ENGINE_FALLBACK_ORDER if item != preferred),
+        )
+        for engine in candidates:
             page: DokobotPage | None = None
             try:
                 page = self.read(_SEARCH_ENGINE_HOME[engine], screens=1)
@@ -353,11 +407,13 @@ class DokobotClient:
             return engine
         detail = "; ".join(errors)
         raise DokobotError(
-            "Bing 和 Google 均无法连接，已跳过联网搜索任务"
+            "支持的搜索引擎均无法连接，已跳过联网搜索任务"
             + (f"：{detail}" if detail else "")
         )
 
-    def search(self, query: str, *, num: int) -> list[DokobotSearchItem]:
+    def search(
+        self, query: str, *, num: int, start_date: date | None = None
+    ) -> list[DokobotSearchItem]:
         limit = min(max(num, 1), 100)
         page_size = 10
         encoded = quote_plus(query)
@@ -370,6 +426,30 @@ class DokobotClient:
             build_url = lambda offset: (
                 f"https://www.bing.com/search?q={encoded}&count={page_size}"
                 + (f"&first={offset + 1}" if offset else "")
+            )
+        elif self.search_engine == "baidu":
+            date_filter = ""
+            effective_start_date = start_date or self.search_start_date
+            if effective_start_date:
+                start_timestamp = int(
+                    datetime.combine(
+                        effective_start_date, datetime_time.min, tzinfo=UTC
+                    ).timestamp()
+                )
+                date_filter = "&gpc=" + quote_plus(
+                    f"stf={start_timestamp},2147483647|stftype=1"
+                )
+            build_url = lambda offset: (
+                f"https://www.baidu.com/s?wd={encoded}&rn={page_size}&pn={offset}"
+                + date_filter
+            )
+        elif self.search_engine == "sogou":
+            build_url = lambda offset: (
+                f"https://www.sogou.com/web?query={encoded}&page={offset // page_size + 1}"
+            )
+        elif self.search_engine == "so360":
+            build_url = lambda offset: (
+                f"https://www.so.com/s?q={encoded}&pn={offset // page_size + 1}"
             )
         else:
             raise DokobotError(f"不支持的搜索引擎：{self.search_engine}")

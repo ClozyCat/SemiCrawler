@@ -19,7 +19,7 @@ const NAV = [
   { id: 'settings', label: 'API配置', icon: Settings },
 ]
 const EMPTY_FORM = {
-  mode: 'crawler', name: '', base_url: '', enabled: true, search_query: '', source_hint: '', max_results: 10,
+  mode: 'crawler', name: '', base_url: '', enabled: true, search_query: '', source_hint: '', max_results: 10, preferred_search_engine: 'google',
   config: JSON.stringify({
     entry_urls: ['https://example.com/news'], article_url_pattern: '/news/',
     selectors: { list_links: 'article a', title: 'h1', date: '.publish-date', content: '.content' },
@@ -28,6 +28,14 @@ const EMPTY_FORM = {
 }
 const DASHSCOPE_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 const DOKOBOT_BASE_URL = 'https://dokobot.ai'
+const SEARCH_ENGINES = [
+  ['google', 'Google'],
+  ['bing', 'Bing'],
+  ['baidu', '百度'],
+  ['sogou', '搜狗'],
+  ['so360', '360 搜索'],
+]
+const SEARCH_ENGINE_LABELS = Object.fromEntries(SEARCH_ENGINES)
 
 function formatTime(value) {
   if (!value) return '—'
@@ -66,6 +74,7 @@ function SourceForm({ source, onClose, onSaved }) {
     search_query: source.config?.query || '',
     source_hint: source.config?.source_hint || '',
     max_results: source.config?.max_results || 10,
+    preferred_search_engine: source.config?.preferred_search_engine || 'google',
     config: JSON.stringify(source.config, null, 2),
   } : EMPTY_FORM)
   const [error, setError] = useState('')
@@ -81,7 +90,7 @@ function SourceForm({ source, onClose, onSaved }) {
         name: `联网搜索：${query.replace(/\s+/g, ' ').slice(0, 42)}`,
         base_url: DOKOBOT_BASE_URL,
         enabled: form.enabled,
-        config: { type: 'web_search', query, source_hint: form.source_hint.trim(), max_results: Number(form.max_results) },
+        config: { type: 'web_search', query, source_hint: form.source_hint.trim(), max_results: Number(form.max_results), preferred_search_engine: form.preferred_search_engine },
       } : { name: form.name.trim(), base_url: form.base_url.trim(), enabled: form.enabled, config: JSON.parse(form.config) }
       const saved = source ? await api.updateSource(source.id, payload) : await api.addSource(payload)
       onSaved(saved); onClose()
@@ -123,7 +132,10 @@ function SourceForm({ source, onClose, onSaved }) {
         </> : <div className="search-source-fields full">
           <label className="field"><span>检索主题与关键词总结</span><textarea required rows="5" value={form.search_query} onChange={(e) => setForm({ ...form, search_query: e.target.value })} placeholder="例如：检索中国大陆先进封装、Chiplet 项目的签约、开工和扩产动态，关注投资金额、项目地点与产能。" /></label>
           <label className="field"><span>网址来源提示</span><textarea rows="4" value={form.source_hint} onChange={(e) => setForm({ ...form, source_hint: e.target.value })} placeholder="例如：优先政府、开发区与企业官网；重点检索 gov.cn、公司新闻中心，也可粘贴具体网址。" /></label>
-          <label className="field"><span>查看数量上限</span><input required type="number" min="1" max="100" step="1" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: e.target.value })} /></label>
+          <div className="search-options">
+            <label className="field"><span>首选搜索引擎</span><select value={form.preferred_search_engine} onChange={(e) => setForm({ ...form, preferred_search_engine: e.target.value })}>{SEARCH_ENGINES.map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
+            <label className="field"><span>查看数量上限</span><input required type="number" min="1" max="100" step="1" value={form.max_results} onChange={(e) => setForm({ ...form, max_results: e.target.value })} /></label>
+          </div>
           <p className="source-mode-note"><Globe2 />任务执行时由 Dokobot 免费本地模式打开搜索页和原始网页，再由已配置的模型生成可追溯结构化记录。</p>
         </div>}
         {error && <p className="form-error full">{error}</p>}
@@ -363,7 +375,7 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
 
 function SourcesView({ sources, onAdd, onEdit, onToggle }) {
   return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>维护网站采集配置与 Dokobot 本地联网检索主题。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
-    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址 / 检索主题</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b>{source.source_type === 'web_search' ? <span className="source-query" title={source.config.query}>{source.config.query}</span> : <a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a>}<span>{source.source_type === 'web_search' ? 'Dokobot 本地搜索' : source.builtin ? '内置网站' : '自定义网站'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
+    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址 / 检索主题</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b>{source.source_type === 'web_search' ? <span className="source-query" title={source.config.query}>{source.config.query}</span> : <a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a>}<span>{source.source_type === 'web_search' ? `联网 · ${SEARCH_ENGINE_LABELS[source.config.preferred_search_engine || 'google']}` : source.builtin ? '内置网站' : '自定义网站'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
   </>
 }
 

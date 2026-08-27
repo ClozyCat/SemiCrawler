@@ -147,7 +147,7 @@ def create_source(payload: SourceCreate, db: Session = Depends(get_db)):
     if db.scalar(select(Source).where(Source.name == payload.name)):
         raise HTTPException(409, "来源名称已存在")
     try:
-        validate_source_config(str(payload.base_url), payload.config)
+        validated_config = validate_source_config(str(payload.base_url), payload.config)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     source = Source(
@@ -155,7 +155,7 @@ def create_source(payload: SourceCreate, db: Session = Depends(get_db)):
         base_url=str(payload.base_url),
         enabled=payload.enabled,
         builtin=False,
-        config_json=json.dumps(payload.config, ensure_ascii=False),
+        config_json=json.dumps(validated_config.model_dump(), ensure_ascii=False),
     )
     db.add(source)
     db.flush()
@@ -176,13 +176,15 @@ def update_source(source_id: int, payload: SourceUpdate, db: Session = Depends(g
     candidate_base = str(values.get("base_url") or source.base_url)
     candidate_config = values.get("config") or json.loads(source.config_json)
     try:
-        validate_source_config(candidate_base, candidate_config)
+        validated_config = validate_source_config(candidate_base, candidate_config)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     if "base_url" in values:
         values["base_url"] = str(values["base_url"])
     if "config" in values:
-        values["config_json"] = json.dumps(values.pop("config"), ensure_ascii=False)
+        values["config_json"] = json.dumps(
+            validated_config.model_dump(), ensure_ascii=False
+        )
     for key, value in values.items():
         setattr(source, key, value)
     if "config_json" in values:

@@ -329,7 +329,7 @@ Chrome profile 中没有扩展、扩展被禁用，或者 Chrome 启动的是另
 
 ### 搜索结果为空或出现验证码
 
-Dokobot 会读取 Google/Bing 搜索页，服务器 IP 可能触发验证码。通过临时 VNC 在同一个 Chrome profile 中完成验证后重试。不要通过提高并发绕过站点限制。
+Dokobot 会读取 Google、Bing、百度、搜狗或 360 搜索页，服务器 IP 可能触发验证码。通过临时 VNC 在同一个 Chrome profile 中完成验证后重试。不要通过提高并发绕过站点限制。
 
 ### Chrome 启动失败
 

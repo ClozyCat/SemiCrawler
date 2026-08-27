@@ -82,9 +82,9 @@ def test_client_search_reads_later_pages_until_result_limit(monkeypatch):
 
     assert len(items) == 25
     assert urls == [
-        "https://www.bing.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&count=10",
-        "https://www.bing.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&count=10&first=11",
-        "https://www.bing.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&count=10&first=21",
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10",
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10&start=10",
+        "https://www.google.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&num=10&start=20",
     ]
 
 
@@ -111,28 +111,11 @@ def test_client_search_deduplicates_results_across_pages(monkeypatch):
     assert calls == 2
 
 
-def test_search_engine_connectivity_prefers_bing(monkeypatch):
+def test_search_engine_connectivity_uses_google_by_default(monkeypatch):
     urls = []
 
     def fake_read(self, url, *, screens=None):
         urls.append(url)
-        return DokobotPage(title="Search", url=url, text="available")
-
-    monkeypatch.setattr(DokobotClient, "read", fake_read)
-    client = DokobotClient(executable="dokobot")
-
-    assert client.select_search_engine() == "bing"
-    assert client.search_engine == "bing"
-    assert urls == ["https://www.bing.com/"]
-
-
-def test_search_engine_connectivity_falls_back_to_google(monkeypatch):
-    urls = []
-
-    def fake_read(self, url, *, screens=None):
-        urls.append(url)
-        if "bing.com" in url:
-            raise DokobotError("unreachable")
         return DokobotPage(title="Search", url=url, text="available")
 
     monkeypatch.setattr(DokobotClient, "read", fake_read)
@@ -140,10 +123,27 @@ def test_search_engine_connectivity_falls_back_to_google(monkeypatch):
 
     assert client.select_search_engine() == "google"
     assert client.search_engine == "google"
-    assert urls == ["https://www.bing.com/", "https://www.google.com/"]
+    assert urls == ["https://www.google.com/"]
 
 
-def test_search_engine_connectivity_raises_when_both_are_unreachable(monkeypatch):
+def test_search_engine_connectivity_falls_back_from_google_to_bing(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        if "google.com" in url:
+            raise DokobotError("unreachable")
+        return DokobotPage(title="Search", url=url, text="available")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    assert client.select_search_engine() == "bing"
+    assert client.search_engine == "bing"
+    assert urls == ["https://www.google.com/", "https://www.bing.com/"]
+
+
+def test_search_engine_connectivity_raises_when_all_are_unreachable(monkeypatch):
     def fake_read(self, url, *, screens=None):
         raise DokobotError("unreachable")
 
@@ -153,7 +153,7 @@ def test_search_engine_connectivity_raises_when_both_are_unreachable(monkeypatch
     try:
         client.select_search_engine()
     except DokobotError as exc:
-        assert "Bing 和 Google 均无法连接" in str(exc)
+        assert "支持的搜索引擎均无法连接" in str(exc)
         assert "已跳过联网搜索任务" in str(exc)
     else:
         raise AssertionError("expected connectivity error")
@@ -179,6 +179,76 @@ def test_client_search_uses_selected_bing_engine(monkeypatch):
     assert urls == [
         "https://www.bing.com/search?q=%E5%85%88%E8%BF%9B%E5%B0%81%E8%A3%85&count=10"
     ]
+
+
+def test_selected_domestic_engine_is_not_replaced_when_reachable(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        return DokobotPage(title="Search", url=url, text="available")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    assert client.select_search_engine("sogou") == "sogou"
+    assert urls == ["https://www.sogou.com/"]
+
+
+def test_default_fallback_order_is_google_bing_baidu_sogou_360(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        if "so.com" not in url:
+            raise DokobotError("unreachable")
+        return DokobotPage(title="Search", url=url, text="available")
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+
+    assert client.select_search_engine() == "so360"
+    assert urls == [
+        "https://www.google.com/",
+        "https://www.bing.com/",
+        "https://www.baidu.com/",
+        "https://www.sogou.com/",
+        "https://www.so.com/",
+    ]
+
+
+def test_non_google_query_removes_unsupported_after_operator():
+    query = build_search_query(
+        "电子工业项目信息 after:2026-08-01",
+        "site:laoyaoba.com",
+        date(2026, 8, 1),
+        engine="bing",
+    )
+
+    assert "after:" not in query
+    assert "site:laoyaoba.com" in query
+
+
+def test_client_search_uses_baidu_date_filter(monkeypatch):
+    urls = []
+
+    def fake_read(self, url, *, screens=None):
+        urls.append(url)
+        return DokobotPage(
+            title="Search",
+            url=url,
+            text="[结果](https://example.com/news/1)",
+        )
+
+    monkeypatch.setattr(DokobotClient, "read", fake_read)
+    client = DokobotClient(executable="dokobot")
+    client.search_engine = "baidu"
+
+    client.search("先进封装 site:laoyaoba.com", num=1, start_date=date(2026, 8, 1))
+
+    assert urls[0].startswith("https://www.baidu.com/s?wd=")
+    assert "&pn=0&gpc=stf%3D" in urls[0]
+    assert "%7Cstftype%3D1" in urls[0]
 
 
 def test_cli_error_uses_windows_system_encoding_fallback():
