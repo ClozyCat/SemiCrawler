@@ -8,6 +8,7 @@ from app.dokobot import (
     _decode_output,
     build_search_query,
     parse_search_results,
+    source_hint_batches,
     source_hint_variants,
 )
 
@@ -26,6 +27,22 @@ def test_source_hint_variants_split_each_url_into_independent_scopes():
     assert source_hint_variants(
         "https://example.com/news\nhttps://gov.cn/projects\n优先项目公告"
     ) == ["https://example.com/news", "https://gov.cn/projects", "优先项目公告"]
+
+
+def test_source_hint_batches_groups_at_most_six_urls_for_one_query():
+    source_hint = "\n".join(f"https://source-{index}.example/news" for index in range(1, 8))
+
+    assert source_hint_batches(source_hint) == [
+        "\n".join(f"https://source-{index}.example/news" for index in range(1, 7)),
+        "https://source-7.example/news",
+    ]
+
+
+def test_source_hint_batches_preserves_text_hint_order():
+    assert source_hint_batches("说明文字\nhttps://one.example\nhttps://two.example") == [
+        "说明文字",
+        "https://one.example\nhttps://two.example",
+    ]
 
 
 def test_search_results_extract_direct_and_google_redirect_links():

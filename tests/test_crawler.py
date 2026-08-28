@@ -311,7 +311,7 @@ def test_web_search_executes_five_planned_queries_plus_original_and_merges_resul
         )
 
 
-def test_web_search_runs_each_query_against_each_source_url_without_total_limit(
+def test_web_search_groups_source_urls_per_query_without_total_limit(
     monkeypatch,
 ):
     searched = []
@@ -389,13 +389,12 @@ def test_web_search_runs_each_query_against_each_source_url_without_total_limit(
             },
         )
 
-    assert len(searched) == 6
+    assert len(searched) == 3
     assert all(num == 100 for _, num in searched)
-    assert sum("site:one.example" in query for query, _ in searched) == 3
-    assert sum("site:two.example" in query for query, _ in searched) == 3
-    assert result[3] == 6
+    assert all("site:one.example OR site:two.example" in query for query, _ in searched)
+    assert result[3] == 3
     assert result[0] == 1
-    assert result[1] == 5
+    assert result[1] == 2
 
 
 def test_merge_ranked_search_results_round_robins_and_deduplicates():

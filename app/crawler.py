@@ -21,7 +21,7 @@ from .dokobot import (
     DokobotClient,
     DokobotError,
     build_search_query,
-    source_hint_variants,
+    source_hint_batches,
 )
 from .llm import (
     ModelOutputError,
@@ -342,7 +342,7 @@ def collect_web_search_source(
     )
     db.commit()
 
-    source_variants = source_hint_variants(config.source_hint)
+    source_variants = source_hint_batches(config.source_hint)
     search_specs = [
         (planned_query, source_hint)
         for planned_query in planned_queries
@@ -478,7 +478,7 @@ def collect_web_search_source(
             message=(
                 f"Dokobot 本地联网检索完成 {snapshot['name']}："
                 f"执行 {len(search_specs)} 条搜索查询（{len(planned_queries)} 个关键词 × "
-                f"{len(source_variants)} 个来源范围），"
+                f"{len(source_variants)} 个来源批次），"
                 f"合并找到 {len(results)} 篇，读取 {len(pages)} 篇，"
                 f"保存 {saved} 篇、结构化 {structured} 条，"
                 f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"

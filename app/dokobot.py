@@ -69,6 +69,7 @@ SEARCH_ENGINE_LABELS = {
 }
 SEARCH_ENGINE_FALLBACK_ORDER = ("google", "bing", "baidu", "sogou", "so360")
 DEFAULT_SEARCH_ENGINE = "google"
+SOURCE_HINT_URL_BATCH_SIZE = 6
 
 
 def _effective_start_date(query: str, start_date: date) -> date:
@@ -117,7 +118,12 @@ def build_search_query(
 
 
 def source_hint_variants(source_hint: str) -> list[str]:
-    """Split URL source hints so each URL becomes an independent search scope."""
+    """Split source hints into individual URL or text entries.
+
+    This remains as the low-level splitter for callers that need the legacy
+    one-entry representation. Search collection uses ``source_hint_batches``
+    so several URL entries can share one ``site:... OR site:...`` query.
+    """
     variants: list[str] = []
     for line in source_hint.splitlines():
         line = line.strip()
@@ -133,6 +139,44 @@ def source_hint_variants(source_hint: str) -> list[str]:
         else:
             variants.append(line)
     return list(dict.fromkeys(variant for variant in variants if variant)) or [""]
+
+
+def source_hint_batches(
+    source_hint: str, *, batch_size: int = SOURCE_HINT_URL_BATCH_SIZE
+) -> list[str]:
+    """Group URL source hints into batches for one search-engine query.
+
+    A batch contains at most six URL entries by default. Non-URL hints keep
+    their legacy independent-query behavior, while URL entries in a batch are
+    joined with newlines so ``build_search_query`` emits OR-ed ``site:``
+    operators for their domains.
+    """
+    if batch_size < 1:
+        raise ValueError("batch_size must be positive")
+
+    entries = source_hint_variants(source_hint)
+    batches: list[str] = []
+    url_batch: list[str] = []
+
+    def flush_url_batch() -> None:
+        if url_batch:
+            batches.append("\n".join(url_batch))
+            url_batch.clear()
+
+    for entry in entries:
+        if re.search(
+            r"https?://[^\s<>\"'）】]+|(?<![@\w])(?:www\.)?[a-z0-9-]+(?:\.[a-z0-9-]+)+",
+            entry,
+            re.IGNORECASE,
+        ):
+            url_batch.append(entry)
+            if len(url_batch) == batch_size:
+                flush_url_batch()
+        else:
+            flush_url_batch()
+            batches.append(entry)
+    flush_url_batch()
+    return batches or [""]
 
 
 def _result_url(raw_url: str) -> str | None:
