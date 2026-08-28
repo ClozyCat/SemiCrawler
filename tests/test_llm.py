@@ -129,7 +129,7 @@ def test_model_request_has_no_search_provider_fields(monkeypatch, capsys):
         "model", "messages", "temperature", "response_format", "max_tokens",
     }
     assert captured["json"]["model"] == "test-model"
-    assert captured["json"]["max_tokens"] == 4096
+    assert captured["json"]["max_tokens"] == 8192
     assert captured["headers"] == {
         "X-API-Version": "2026-08-01",
         "authorization": "Custom test-authorization",
@@ -229,7 +229,7 @@ def test_deepseek_v4_request_uses_low_reasoning_effort(monkeypatch):
     )
 
     assert _call(setting, [{"role": "user", "content": "test"}]) == '{"records": []}'
-    assert captured["json"]["max_tokens"] == 4096
+    assert captured["json"]["max_tokens"] == 8192
     assert captured["json"]["reasoning_effort"] == "low"
 
 

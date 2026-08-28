@@ -81,7 +81,8 @@ class ModelOutputError(ValueError):
     pass
 
 
-MAX_OUTPUT_TOKENS = 4096
+# Leave enough room for a complete structured JSON response on longer articles.
+MAX_OUTPUT_TOKENS = 8192
 MODEL_TIMEOUT = httpx.Timeout(connect=10, read=240, write=30, pool=10)
 
 
