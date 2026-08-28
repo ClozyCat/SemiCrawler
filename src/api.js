@@ -96,6 +96,7 @@ export const api = {
   sources: () => request('/sources'),
   addSource: (source) => request('/sources', { method: 'POST', body: JSON.stringify(source) }),
   updateSource: (id, source) => request(`/sources/${id}`, { method: 'PATCH', body: JSON.stringify(source) }),
+  deleteSource: (id) => request(`/sources/${id}`, { method: 'DELETE' }),
   testSource: (source) => request('/sources/test', { method: 'POST', body: JSON.stringify(source) }),
   tasks: () => request('/tasks'),
   createTask: (task) => request('/tasks', { method: 'POST', body: JSON.stringify(task) }),

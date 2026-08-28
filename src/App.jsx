@@ -373,9 +373,9 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
   </>
 }
 
-function SourcesView({ sources, onAdd, onEdit, onToggle }) {
+function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }) {
   return <><div className="title-row"><div><span className="eyebrow">来源配置</span><h1>信息源管理</h1><p>维护网站采集配置与 Dokobot 本地联网检索主题。</p></div><button className="primary" onClick={onAdd}><Plus />添加信息源</button></div>
-    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址 / 检索主题</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b>{source.source_type === 'web_search' ? <span className="source-query" title={source.config.query}>{source.config.query}</span> : <a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a>}<span>{source.source_type === 'web_search' ? `联网 · ${SEARCH_ENGINE_LABELS[source.config.preferred_search_engine || 'google']}` : source.builtin ? '内置网站' : '自定义网站'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button></div>)}</section>
+    <section className="panel management-list"><div className="list-head"><span>名称</span><span>入口地址 / 检索主题</span><span>类型</span><span>状态</span><span>操作</span></div>{sources.map((source) => <div className="management-row" key={source.id}><b>{source.name}</b>{source.source_type === 'web_search' ? <span className="source-query" title={source.config.query}>{source.config.query}</span> : <a href={source.base_url} target="_blank" rel="noreferrer">{source.base_url}<ExternalLink /></a>}<span>{source.source_type === 'web_search' ? `联网 · ${SEARCH_ENGINE_LABELS[source.config.preferred_search_engine || 'google']}` : source.builtin ? '内置网站' : '自定义网站'}</span><label className="switch"><input type="checkbox" checked={source.enabled} onChange={(e) => onToggle(source, e.target.checked)} /><i /></label><div className="source-actions"><button className="text-btn" onClick={() => onEdit(source)}>编辑配置</button>{!source.builtin && <button className="icon-btn source-delete" type="button" title="删除信息源" aria-label={`删除信息源 ${source.name}`} disabled={deletingIds.has(source.id)} onClick={() => onDelete(source)}>{deletingIds.has(source.id) ? <LoaderCircle className="spin" /> : <Trash2 />}</button>}</div></div>)}</section>
   </>
 }
 
@@ -470,6 +470,7 @@ export default function App() {
   const [articleQuery, setArticleQuery] = useState('')
   const [structuringIds, setStructuringIds] = useState(() => new Set())
   const [stoppingIds, setStoppingIds] = useState(() => new Set())
+  const [deletingSourceIds, setDeletingSourceIds] = useState(() => new Set())
   const [sourceModal, setSourceModal] = useState(null)
   const [logs, setLogs] = useState(null)
   const [detailId, setDetailId] = useState(null)
@@ -518,6 +519,15 @@ export default function App() {
   }
   const sourceSaved = (saved) => setSources((old) => old.some((item) => item.id === saved.id) ? old.map((item) => item.id === saved.id ? saved : item) : [...old, saved])
   const toggleSource = async (source, enabled) => { try { sourceSaved(await api.updateSource(source.id, { enabled })) } catch (err) { setError(err.message) } }
+  const deleteSource = async (source) => {
+    if (!window.confirm(`确定删除信息源“${source.name}”吗？此操作不会删除历史任务。`)) return
+    setDeletingSourceIds((old) => new Set(old).add(source.id)); setError('')
+    try {
+      await api.deleteSource(source.id)
+      setSources((old) => old.filter((item) => item.id !== source.id))
+    } catch (err) { setError(err.message) }
+    finally { setDeletingSourceIds((old) => { const next = new Set(old); next.delete(source.id); return next }) }
+  }
   const structureArticle = async (id) => {
     setStructuringIds((old) => new Set(old).add(id)); setError('')
     try {
@@ -541,7 +551,7 @@ export default function App() {
   return <div className="app-shell">
     <aside className={mobileNav ? 'open' : ''}><div className="brand"><span>芯</span><div><b>第二战线情报站</b><small>SEMI INTELLIGENCE</small></div></div><nav>{NAV.map(({ id, label, icon: Icon }) => <button key={id} className={view === id ? 'active' : ''} onClick={() => { setView(id); setMobileNav(false) }}><Icon /><span>{label}</span></button>)}</nav><div className="service-state"><i /><div><b>本地服务正常</b></div></div></aside>
     <div className="main-column"><header className="topbar"><button className="mobile-menu icon-btn" onClick={() => setMobileNav(!mobileNav)} aria-label="菜单"><Menu /></button><span>{activeLabel}</span><div><button className="icon-btn" aria-label="刷新" onClick={refreshAll}><RefreshCw /></button></div></header>
-      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting, stoppingIds }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onTerminate={terminateTask} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds, stoppingIds }} onLogs={showLogs} onTerminate={terminateTask} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
+      <main>{loading ? <div className="loading"><LoaderCircle className="spin" />正在连接本地服务</div> : view === 'dashboard' ? <Dashboard {...{ meta, sources, tasks, articles, creating, keywordSetting, stoppingIds }} records={dashboardRecords} onCreateTask={createTask} onAddSource={() => setSourceModal('new')} onLogs={showLogs} onTerminate={terminateTask} onDetail={(id) => setDetailId(id)} onHistory={() => setView('history')} onError={setError} /> : view === 'sources' ? <SourcesView sources={sources} onAdd={() => setSourceModal('new')} onEdit={setSourceModal} onToggle={toggleSource} onDelete={deleteSource} deletingIds={deletingSourceIds} /> : view === 'keywords' ? <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} /> : view === 'history' ? <HistoryView {...{ meta, tasks, records, filters, setFilters, articles, articleQuery, setArticleQuery, structuringIds, stoppingIds }} onLogs={showLogs} onTerminate={terminateTask} onDetail={setDetailId} onStructure={structureArticle} onDeleteRecords={(ids) => deleteHistory('records', ids)} onDeleteArticles={(ids) => deleteHistory('articles', ids)} onDeleteTasks={(ids) => deleteHistory('tasks', ids)} /> : view === 'analytics' ? <AnalyticsView data={analytics} loading={analyticsLoading} filters={filters} setFilters={setFilters} /> : <SettingsView />}</main>
     </div>
     {mobileNav && <button className="nav-backdrop" aria-label="关闭菜单" onClick={() => setMobileNav(false)} />}
     {sourceModal && <SourceForm source={sourceModal === 'new' ? null : sourceModal} onClose={() => setSourceModal(null)} onSaved={sourceSaved} />}

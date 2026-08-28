@@ -4,7 +4,8 @@ from io import BytesIO
 from openpyxl import load_workbook
 
 from app.constants import EXPORT_COLUMNS
-from app.models import RawArticle, StructuredRecord
+from app.database import SessionLocal
+from app.models import RawArticle, SourceVersion, StructuredRecord
 
 
 def test_defaults_sources_and_meta(client):
@@ -48,6 +49,53 @@ def test_source_persistence_and_toggle(client):
     updated = client.patch(f"/api/sources/{source_id}", json={"enabled": False})
     assert updated.status_code == 200
     assert updated.json()["enabled"] is False
+
+    deleted = client.delete(f"/api/sources/{source_id}")
+    assert deleted.status_code == 200
+    assert deleted.json() == {"deleted": 1}
+    assert all(item["id"] != source_id for item in client.get("/api/sources").json())
+    with SessionLocal() as db:
+        assert db.query(SourceVersion).filter_by(source_id=source_id).count() == 0
+
+
+def test_source_delete_rejects_builtin_and_source_with_articles(client):
+    builtin = client.get("/api/sources").json()[0]
+    response = client.delete(f"/api/sources/{builtin['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "内置信息源不可删除，可将其停用"
+
+    created = client.post(
+        "/api/sources",
+        json={
+            "name": "有数据的来源",
+            "base_url": "https://example.org",
+            "config": {
+                "entry_urls": ["https://example.org/news"],
+                "article_url_pattern": "/news/",
+                "selectors": {
+                    "list_links": "a",
+                    "title": "h1",
+                    "date": ".date",
+                    "content": ".content",
+                },
+            },
+        },
+    ).json()
+    with SessionLocal() as db:
+        db.add(
+            RawArticle(
+                source_id=created["id"],
+                canonical_url="https://example.org/news/1",
+                title="测试原文",
+                body="正文",
+                content_hash="hash",
+            )
+        )
+        db.commit()
+
+    response = client.delete(f"/api/sources/{created['id']}")
+    assert response.status_code == 409
+    assert response.json()["detail"] == "该信息源已有原始数据，请先删除相关原始数据"
 
 
 def test_web_search_source_uses_simple_natural_language_config(client):

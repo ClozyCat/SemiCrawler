@@ -206,6 +206,39 @@ def update_source(source_id: int, payload: SourceUpdate, db: Session = Depends(g
     return source_read(source)
 
 
+@app.delete("/api/sources/{source_id}")
+def delete_source(source_id: int, db: Session = Depends(get_db)):
+    source = db.get(Source, source_id)
+    if not source:
+        raise HTTPException(404, "来源不存在")
+    if source.builtin:
+        raise HTTPException(409, "内置信息源不可删除，可将其停用")
+
+    article_count = (
+        db.scalar(
+            select(func.count())
+            .select_from(RawArticle)
+            .where(RawArticle.source_id == source_id)
+        )
+        or 0
+    )
+    if article_count:
+        raise HTTPException(409, "该信息源已有原始数据，请先删除相关原始数据")
+
+    active_tasks = db.scalars(
+        select(CollectionTask).where(
+            CollectionTask.status.in_(("queued", "running", "terminating"))
+        )
+    ).all()
+    if any(source_id in json.loads(task.source_ids_json) for task in active_tasks):
+        raise HTTPException(409, "该信息源正被采集任务使用，请等待任务结束后再删除")
+
+    db.execute(delete(SourceVersion).where(SourceVersion.source_id == source_id))
+    db.delete(source)
+    db.commit()
+    return {"deleted": 1}
+
+
 @app.post("/api/sources/test")
 def test_source_config(payload: SourceTest):
     try:
