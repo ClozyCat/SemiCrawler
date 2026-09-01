@@ -461,7 +461,7 @@ function TaskPanel({ task, onLogs, onTerminate, stoppingIds }) {
             <span>AI 结构化</span>
             <b>{task.structured_count}</b>
           </div>
-          <div className="task-stat-item">
+          <div className={`task-stat-item ${task.failed_count > 0 ? 'is-alert' : ''}`}>
             <span>异常失败</span>
             <b>{task.failed_count}</b>
           </div>
@@ -530,7 +530,7 @@ function DashboardRecordsPreview({ records, onDetail, onHistory, onError }) {
                 <th>企业 / 机构名称</th>
                 <th>资讯类型</th>
                 <th>投资金额</th>
-                <th>事件日期</th>
+                <th className="date-cell">事件日期</th>
                 <th>信息来源</th>
                 <th>操作</th>
               </tr>
@@ -540,7 +540,7 @@ function DashboardRecordsPreview({ records, onDetail, onHistory, onError }) {
                 <tr key={record.id}>
                   <td>
                     {record.region ? (
-                      <span className="source-kind custom">{record.region}</span>
+                      <span className="region-chip">{record.region}</span>
                     ) : '—'}
                   </td>
                   <td className="strong-cell">
@@ -556,7 +556,7 @@ function DashboardRecordsPreview({ records, onDetail, onHistory, onError }) {
                       <span className="money-highlight">{record.investment_amount}</span>
                     ) : '—'}
                   </td>
-                  <td>{record.event_date || '—'}</td>
+                  <td className="date-cell">{record.event_date || '—'}</td>
                   <td>{record.source_name || '—'}</td>
                   <td>
                     <button className="text-btn" onClick={() => onDetail(record.id)}>
@@ -720,7 +720,7 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
               <th>资讯类型</th>
               <th>投资金额</th>
               <th>产品 / 项目名称</th>
-              <th>事件日期</th>
+              <th className="date-cell">事件日期</th>
               <th>信息来源</th>
               <th>原文</th>
               <th>操作</th>
@@ -738,7 +738,7 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
                 </td>
                 <td>
                   {record.region ? (
-                    <span className="source-kind custom">{record.region}</span>
+                    <span className="region-chip">{record.region}</span>
                   ) : '—'}
                 </td>
                 <td>{record.organization || '—'}</td>
@@ -754,7 +754,7 @@ function Results({ meta, records, filters, setFilters, onDetail, onDelete }) {
                   ) : '—'}
                 </td>
                 <td>{record.project_name || '—'}</td>
-                <td>{record.event_date || '—'}</td>
+                <td className="date-cell">{record.event_date || '—'}</td>
                 <td>{record.source_name || '—'}</td>
                 <td>
                   {record.original_url ? (
@@ -952,33 +952,38 @@ function Dashboard({
               </div>
             </div>
 
-            <div className="runbar">
-              <div className="runbar-date-group">
-                <CalendarDays />
+            <div className="run-body">
+              <label className="run-field">
+                <span><CalendarDays /> 资讯起始日期</span>
                 <input
                   type="date"
                   value={startDate}
                   onChange={(e) => setStartDate(e.target.value)}
-                  aria-label="资讯起始日期"
                 />
-              </div>
+              </label>
 
-              <div className="task-options">
-                <label className="check-field">
+              <div className="run-toggles">
+                <label className="toggle-card">
                   <input
                     type="checkbox"
                     checked={keywordFilter}
                     onChange={(e) => setKeywordFilter(e.target.checked)}
                   />
-                  <span>三维关键词过滤</span>
+                  <div className="toggle-card-copy">
+                    <b>三维关键词过滤</b>
+                    <small>技术词 · 名词 · 动词需同时命中</small>
+                  </div>
                 </label>
-                <label className="check-field">
+                <label className="toggle-card">
                   <input
                     type="checkbox"
                     checked={autoStructure}
                     onChange={(e) => setAutoStructure(e.target.checked)}
                   />
-                  <span>AI 自动结构化</span>
+                  <div className="toggle-card-copy">
+                    <b>AI 自动结构化</b>
+                    <small>入库时同步解析要素字段</small>
+                  </div>
                 </label>
               </div>
 
@@ -988,7 +993,7 @@ function Dashboard({
                 onClick={handleCreateTask}
               >
                 {creating ? <LoaderCircle className="spin" /> : <Play />}
-                {creating ? '正在创建任务...' : '建立采集任务'}
+                {creating ? '正在创建任务...' : `建立采集任务${selected.length ? ` · ${selected.length} 个来源` : ''}`}
               </button>
             </div>
           </section>
@@ -1245,12 +1250,17 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
                 <b>资讯类型占比</b>
               </div>
               <div className="analytics-types">
-                {(data?.info_types || []).slice(0, 8).map((item) => (
-                  <div key={item.name}>
-                    <span>{item.name}</span>
-                    <b>{item.value}</b>
-                  </div>
-                ))}
+                {(data?.info_types || []).slice(0, 8).map((item) => {
+                  const maxValue = Math.max(...(data.info_types || []).map((t) => t.value), 1)
+                  const pct = Math.round((item.value / maxValue) * 100)
+                  return (
+                    <div className="type-row" key={item.name}>
+                      <span className="type-row-name">{item.name}</span>
+                      <div className="type-row-bar"><i style={{ width: `${Math.max(pct, 4)}%` }} /></div>
+                      <b>{item.value}</b>
+                    </div>
+                  )
+                })}
               </div>
             </section>
           </div>
@@ -1260,24 +1270,38 @@ function AnalyticsView({ data, loading, filters, setFilters }) {
   )
 }
 
+function isHeaderRow(row, rows) {
+  if (!row || rows.length < 2) return false
+  const cells = row.map((v) => (v == null ? '' : String(v).trim())).filter(Boolean)
+  if (!cells.length) return false
+  return cells.every((c) => c.length <= 12 && !/[、，,]/.test(c))
+}
+
 function technicalSheetRows(sheet) {
   if (!sheet) return []
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 })
-  return rows.slice(1).map((values) => ({
+  const start = isHeaderRow(rows[0], rows) ? 1 : 0
+  return rows.slice(start).map((values) => ({
     category: values[0] || '',
     field: values[1] || '',
-    keywords: values.slice(2).join('，')
+    keywords: values.slice(2).filter((v) => v != null && String(v).trim()).join('，')
   })).filter((item) => Object.values(item).some(Boolean))
 }
 
 function sheetRows(sheet) {
   if (!sheet) return []
   const rows = XLSX.utils.sheet_to_json(sheet, { header: 1 })
-  return rows.slice(1).map((values) => ({
-    industry: values[0] || '',
-    field: values[1] || '',
-    keywords: values.slice(2).join('，')
-  })).filter((item) => Object.values(item).some(Boolean))
+  const start = isHeaderRow(rows[0], rows) ? 1 : 0
+  return rows.slice(start).map((values) => {
+    const cells = (values || []).map((v) => (v == null ? '' : String(v).trim()))
+    const nonEmpty = cells.filter(Boolean)
+    if (!nonEmpty.length) return null
+    // 单列布局：整格直接作为关键词（Sheet2/Sheet3 常见，如“一期、二期、…、产业园”）
+    if (nonEmpty.length === 1) {
+      return { industry: '', field: '', keywords: cells[0] }
+    }
+    return { industry: cells[0], field: cells[1], keywords: cells.slice(2).join('，') }
+  }).filter(Boolean)
 }
 
 function KeywordsView({ setting, onSaved }) {
@@ -1518,46 +1542,53 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
 
       <section className="panel management-list">
         <div className="list-head">
-          <span style={{ flex: 1.5 }}>名称</span>
-          <span style={{ flex: 2 }}>入口地址 / 检索意图</span>
-          <span style={{ flex: 1 }}>类型与引擎</span>
-          <span style={{ width: 80, textAlign: 'center' }}>启用状态</span>
-          <span style={{ width: 140, textAlign: 'right' }}>操作</span>
+          <span>名称</span>
+          <span>入口地址 / 检索意图</span>
+          <span>类型与引擎</span>
+          <span>启用状态</span>
+          <span>操作</span>
         </div>
         {sources.map((source) => {
           const isSearch = source.source_type === 'web_search'
           return (
             <div className="management-row" key={source.id}>
-              <b style={{ flex: 1.5 }}>{source.name}</b>
-              <div style={{ flex: 2, minWidth: 0 }}>
+              <b>{source.name}</b>
+              <div>
                 {isSearch ? (
                   <span className="source-query" title={source.config?.query}>
                     {source.config?.query}
                   </span>
                 ) : (
-                  <a className="source-link" href={source.base_url} target="_blank" rel="noreferrer">
+                  <a
+                    className="source-link"
+                    href={source.base_url}
+                    target="_blank"
+                    rel="noreferrer"
+                    title={source.base_url}
+                  >
                     {source.base_url} <ExternalLink />
                   </a>
                 )}
               </div>
-              <span style={{ flex: 1 }}>
+              <span>
                 <span className={`source-kind ${isSearch ? 'web-search' : 'custom'}`}>
                   {isSearch
                     ? `🌐 联网 · ${SEARCH_ENGINE_LABELS[source.config?.preferred_search_engine || 'google']}`
                     : source.builtin ? '🏢 内置站点' : '🕷️ 自定义采集'}
                 </span>
               </span>
-              <div style={{ width: 80, display: 'flex', justifyContent: 'center' }}>
+              <div className="source-toggle">
                 <label className="switch">
                   <input
                     type="checkbox"
                     checked={source.enabled}
                     onChange={(e) => onToggle(source, e.target.checked)}
+                    aria-label={`启用信息源 ${source.name}`}
                   />
                   <i />
                 </label>
               </div>
-              <div className="source-actions" style={{ width: 140, justifyContent: 'flex-end' }}>
+              <div className="source-actions">
                 <button className="text-btn" onClick={() => onEdit(source)}>
                   编辑配置
                 </button>
@@ -1577,6 +1608,13 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
             </div>
           )
         })}
+        {!sources.length && (
+          <div className="blank">
+            <BookOpen />
+            <b>尚未配置信息源</b>
+            <span>添加网站爬虫节点或 Dokobot 联网检索意图后即可开始采集。</span>
+          </div>
+        )}
       </section>
     </>
   )
@@ -1948,15 +1986,16 @@ function RecordDetailModal({ id, meta, onClose, onSaved }) {
 
   return (
     <Modal title="结构化要素记录审核与编辑" onClose={onClose} wide>
-      <div className="modal-body detail-layout">
+      <div className="modal-body">
         {!form ? (
           <div className="loading">
             <LoaderCircle className="spin" />
             <span>正在加载记录详情...</span>
           </div>
         ) : (
-          <>
-            <div className="form-grid">
+          <div className="detail-layout">
+            <div className="detail-main">
+              <div className="form-grid">
               <label className="field">
                 <span>地域 / 城市</span>
                 <input
@@ -2043,7 +2082,47 @@ function RecordDetailModal({ id, meta, onClose, onSaved }) {
               </label>
             </div>
             {error && <p className="form-error"><AlertCircle /> {error}</p>}
-          </>
+            </div>
+
+            <aside className="detail-aside">
+              <h3><ShieldCheck /> 溯源信息卡</h3>
+              <div className="detail-chips">
+                {form.region && <span className="region-chip"><MapPin /> {form.region}</span>}
+                {form.info_type && (
+                  <span className="type-chip" data-type={form.info_type}>{form.info_type}</span>
+                )}
+              </div>
+              <div className="detail-summary">
+                <div className="detail-summary-item">
+                  <span>记录编号</span>
+                  <b>#{id}</b>
+                </div>
+                <div className="detail-summary-item">
+                  <span>信息来源</span>
+                  <b>{form.source_name || '未标注来源'}</b>
+                </div>
+                <div className="detail-summary-item">
+                  <span>事件日期</span>
+                  <b>{form.event_date || '未提取到日期'}</b>
+                </div>
+                <div className="detail-summary-item">
+                  <span>投资金额 / 产能</span>
+                  <b>{form.investment_amount || '未披露'}</b>
+                </div>
+                <div className="detail-summary-item">
+                  <span>入库时间</span>
+                  <b>{formatTime(record?.created_at)}</b>
+                </div>
+              </div>
+              {form.original_url ? (
+                <a className="secondary compact-btn" href={form.original_url} target="_blank" rel="noreferrer">
+                  <ExternalLink /> 打开原文核对
+                </a>
+              ) : (
+                <p className="field-note"><Info /> 该记录缺少原文链接，建议补全以便追溯核验。</p>
+              )}
+            </aside>
+          </div>
         )}
       </div>
       <footer className="modal-foot">
@@ -2226,16 +2305,6 @@ function SettingsView() {
                 />
                 <span>爬虫采集时启用普通网站原文自动结构化</span>
               </label>
-
-              <div className="field-note full">
-                <Info style={{ width: 14, height: 14 }} />
-                <span>模型会自动为联网检索信息源规划搜索 Query 并在获取正文后结构化；此开关用于控制传统网站爬虫入库时是否同步执行 AI 解析。</span>
-              </div>
-
-              <div className="source-mode-note full">
-                <Globe2 />
-                <span>Dokobot 检索运行于本地独立沙箱环境。需在本机安装 Dokobot CLI 并完成 <code>dokobot install-bridge</code>；系统不上传私有数据。</span>
-              </div>
 
               {feedback && (
                 <p className="form-success full">
@@ -2465,7 +2534,7 @@ export default function App() {
 
   return (
     <div className="app-shell">
-      <aside className={mobileNav ? 'open' : ''}>
+      <aside className={mobileNav ? 'sidebar open' : 'sidebar'}>
         <div className="brand">
           <div className="brand-icon-wrap">
             <Cpu />
@@ -2473,7 +2542,6 @@ export default function App() {
           <div className="brand-text">
             <div className="brand-title">
               <b>第二战线情报站</b>
-              <span className="tag">PRO</span>
             </div>
             <div className="brand-subtitle">SEMI INTELLIGENCE PLATFORM</div>
           </div>
