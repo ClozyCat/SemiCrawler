@@ -17,7 +17,7 @@ npm run dev
 
 联网信息源可逐个选择 Anysearch、百度搜索或 Tavily，新建来源默认使用 Anysearch。请在“API配置”中保存对应的 API Key；也可以通过 `ANYSEARCH_API_KEY`、`BAIDU_SEARCH_API_KEY`（兼容 `BAIDU_API_KEY`）或 `TAVILY_API_KEY` 环境变量提供密钥。
 
-添加信息源时选择“联网搜索”，选择 Anysearch、百度或 Tavily，并填写自然语言检索主题及可选域名。系统先让 LLM 拆分查询词，再通过所选引擎按来源域名和任务起始日期检索；若日期索引没有召回，会自动在相同域名内放宽 API 日期条件，并在读取正文后执行本地日期过滤。Anysearch 使用 `POST /v1/search` 与 `POST /v1/extract`，域名通过 `site:` 查询约束并在本地再次校验；索引经 LLM 审阅后读取网页正文。最后沿用关键词过滤和结构化流程。
+添加信息源时选择“联网搜索”，选择 Anysearch、百度或 Tavily，并填写自然语言检索主题及可选网址来源偏好。网址必须每行填写一个完整的 HTTP(S) 地址，系统会针对每一行分别调用搜索引擎 API。系统先让 LLM 拆分查询词，再通过所选引擎按来源域名和任务起始日期检索；若日期索引没有召回，会自动在相同域名内放宽 API 日期条件，并在读取正文后执行本地日期过滤。Anysearch 使用 `POST /v1/search` 与 `POST /v1/extract`，域名通过 `site:` 查询约束并在本地再次校验；索引经 LLM 审阅后读取网页正文。最后沿用关键词过滤和结构化流程。
 
 Anysearch、百度搜索和 Tavily API 均可直接在 Docker 或本地后端使用；普通网站采集和已保存数据不依赖搜索 API。
 

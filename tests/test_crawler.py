@@ -447,10 +447,11 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
 
         def search(self, query, **kwargs):
             searched.append((query, kwargs))
+            domain = kwargs["domains"][0]
             return [
                 TavilySearchItem(
                     title=query,
-                    url=f"https://one.example/{len(searched)}",
+                    url=f"https://{domain}/{len(searched)}",
                     published_date="2026-08-21",
                 )
             ]
@@ -519,16 +520,16 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
             },
         )
 
-    assert len(searched) == 3
+    assert len(searched) == 6
     assert all(kwargs["num"] == 20 for _, kwargs in searched)
-    assert all(
-        kwargs["domains"] == ["one.example", "two.example"]
-        for _, kwargs in searched
-    )
+    assert [kwargs["domains"] for _, kwargs in searched] == [
+        ["one.example"],
+        ["two.example"],
+    ] * 3
     assert all("site:" not in query for query, _ in searched)
-    assert result[3] == 3
+    assert result[3] == 6
     assert result[0] == 1
-    assert result[1] == 2
+    assert result[1] == 5
 
 
 def test_merge_ranked_search_results_round_robins_and_deduplicates():

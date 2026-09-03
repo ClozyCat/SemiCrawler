@@ -141,7 +141,7 @@ def test_web_search_source_uses_simple_natural_language_config(client):
             "config": {
                 "type": "web_search",
                 "query": "检索先进封装项目的签约、开工与扩产动态",
-                "source_hint": "优先政府园区官网和企业新闻中心",
+                "source_hint": "https://example.gov.cn/news\nhttps://example.com/press",
                 "max_results": 20,
             },
         },
@@ -153,6 +153,30 @@ def test_web_search_source_uses_simple_natural_language_config(client):
     )
     assert response.json()["config"]["max_results"] == 20
     assert response.json()["config"]["provider"] == "anysearch"
+
+
+def test_web_search_source_rejects_invalid_source_hint_lines(client):
+    for index, source_hint in enumerate(
+        [
+            "优先政府园区官网和企业新闻中心",
+            "https://one.example/news https://two.example/projects",
+        ]
+    ):
+        response = client.post(
+            "/api/sources",
+            json={
+                "name": f"无效网址来源 {index}",
+                "base_url": "https://api.anysearch.com",
+                "config": {
+                    "type": "web_search",
+                    "query": "检索中国半导体项目动态",
+                    "source_hint": source_hint,
+                },
+            },
+        )
+
+        assert response.status_code == 422
+        assert "每行填写一个有效的 http(s) 网址" in response.json()["detail"]
 
 
 def test_web_search_source_defaults_to_anysearch(client):

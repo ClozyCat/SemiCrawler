@@ -157,6 +157,25 @@ function SourceForm({ source, onClose, onSaved }) {
   const submit = async (event) => {
     event.preventDefault()
     setError('')
+    if (form.mode === 'web_search') {
+      const invalidSourceLine = form.source_hint
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .find((line) => {
+          if (!line) return false
+          if ((line.match(/https?:\/\//gi) || []).length !== 1 || /\s/.test(line)) return true
+          try {
+            const parsed = new URL(line)
+            return !['http:', 'https:'].includes(parsed.protocol) || !parsed.hostname
+          } catch {
+            return true
+          }
+        })
+      if (invalidSourceLine) {
+        setError('网址来源偏好必须每行填写一个有效的 http(s) 网址，不能填写多个网址或非网址内容')
+        return
+      }
+    }
     setSaving(true)
     try {
       const isSearch = form.mode === 'web_search'
@@ -252,7 +271,7 @@ function SourceForm({ source, onClose, onSaved }) {
                   required
                   value={form.name}
                   onChange={(e) => setForm({ ...form, name: e.target.value })}
-                  placeholder="例如：集微网、上海张江官网"
+                  placeholder="例如：集微网"
                 />
               </label>
               <label className="field">
@@ -327,7 +346,7 @@ function SourceForm({ source, onClose, onSaved }) {
                       rows={4}
                       value={form.search_query}
                       onChange={(e) => setForm({ ...form, search_query: e.target.value })}
-                      placeholder="例如：半导体项目，可补充时间、地区、产业环节等限定条件"
+                      placeholder="例如：半导体项目，可补充地区、产业环节等限定条件"
                     />
                   </label>
                   <label className="field full">
@@ -336,7 +355,7 @@ function SourceForm({ source, onClose, onSaved }) {
                       rows={2}
                       value={form.source_hint}
                       onChange={(e) => setForm({ ...form, source_hint: e.target.value })}
-                      placeholder="例如：yixing.gov.cn，多个域名用换行分隔"
+                      placeholder="例如：https://yixing.gov.cn，多个网址用换行分隔"
                     />
                   </label>
                   <div className="search-params full">

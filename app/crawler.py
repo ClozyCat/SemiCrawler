@@ -346,52 +346,64 @@ def collect_web_search_source(
     )
     db.commit()
 
-    domains = re.findall(
-        r"(?<![@\w])(?:https?://)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)",
-        config.source_hint,
-        re.IGNORECASE,
-    )
-    domains = list(dict.fromkeys(domain.lower() for domain in domains))
+    # Source preferences are validated as one absolute URL per line. Search
+    # providers accept host names as their domain filter, so retain one host per
+    # input row and issue an independent API request for each row.
+    source_urls = [
+        line.strip() for line in config.source_hint.splitlines() if line.strip()
+    ]
+    source_domains = [
+        (urlparse(source_url).hostname or "").lower().removeprefix("www.")
+        for source_url in source_urls
+    ]
+    domains = list(dict.fromkeys(source_domains))
     search_specs = planned_queries
     result_batches = []
     search_errors: list[ValueError] = []
     relaxed_searches = 0
     api_searches = 0
+    # No source preference means one unrestricted request per planned query.
+    # Otherwise, process each URL row independently (rather than passing all
+    # domains in one provider request).
+    search_domains = source_domains or [None]
     for planned_query in search_specs:
-        ensure_task_active(db, task)
-        try:
-            api_searches += 1
-            batch = search_client.search(
-                planned_query,
-                num=config.max_results,
-                topic="general",
-                start_date=task.start_date,
-                end_date=datetime.now(UTC).date(),
-                domains=domains or None,
-            )
-            if not batch:
-                # Government notices and corporate project pages are often absent
-                # from Tavily's dated index. Retry without API-side dates, then
-                # enforce the task date against result metadata and page content.
+        for domain in search_domains:
+            ensure_task_active(db, task)
+            request_domains = [domain] if domain else None
+            try:
                 api_searches += 1
-                relaxed_searches += 1
                 batch = search_client.search(
                     planned_query,
                     num=config.max_results,
                     topic="general",
-                    domains=domains or None,
+                    start_date=task.start_date,
+                    end_date=datetime.now(UTC).date(),
+                    domains=request_domains,
                 )
-            result_batches.append(batch)
-        except provider_error as exc:
-            search_errors.append(exc)
-            db.add(
-                TaskLog(
-                    task_id=task.id,
-                    level="error",
-                    message=f"{provider_name}查询失败 {planned_query}：{exc}",
+                if not batch:
+                    # Government notices and corporate project pages are often absent
+                    # from Tavily's dated index. Retry without API-side dates, then
+                    # enforce the task date against result metadata and page content.
+                    api_searches += 1
+                    relaxed_searches += 1
+                    batch = search_client.search(
+                        planned_query,
+                        num=config.max_results,
+                        topic="general",
+                        domains=request_domains,
+                    )
+                result_batches.append(batch)
+            except provider_error as exc:
+                search_errors.append(exc)
+                domain_label = f"（来源 {domain}）" if domain else ""
+                db.add(
+                    TaskLog(
+                        task_id=task.id,
+                        level="error",
+                        message=f"{provider_name}查询失败 {planned_query}{domain_label}：{exc}",
+                    )
                 )
-            )
-            db.commit()
+                db.commit()
     if not result_batches and search_errors:
         raise search_errors[0]
     results = merge_ranked_search_results(result_batches)
@@ -519,7 +531,7 @@ def collect_web_search_source(
             message=(
                 f"{provider_name}联网检索完成 {snapshot['name']}："
                 f"执行 {len(search_specs)} 组搜索查询（{len(planned_queries)} 个关键词，"
-                f"{len(domains) or 0} 个限定来源域名），实际请求 {api_searches} 次，"
+                f"{len(source_urls) or 0} 个网址来源），实际请求 {api_searches} 次，"
                 f"其中无日期放宽重试 {relaxed_searches} 次，"
                 f"合并找到 {search_result_count} 篇，索引日期预过滤 {index_date_filtered} 篇，"
                 f"审阅保留 {len(results)} 篇，读取 {pages} 篇，"

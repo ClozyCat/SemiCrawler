@@ -61,10 +61,51 @@ class WebSearchSourceConfig(BaseModel):
     source_hint: str = Field(default="", max_length=2000)
     max_results: int = Field(default=10, ge=1, le=20)
 
-    @field_validator("query", "source_hint")
+    @field_validator("query")
     @classmethod
     def clean_text(cls, value: str) -> str:
         return value.strip()
+
+    @field_validator("source_hint")
+    @classmethod
+    def validate_source_hint(cls, value: str) -> str:
+        value = value.strip()
+        if not value:
+            return value
+        invalid_lines: list[str] = []
+        for raw_line in value.splitlines():
+            line = raw_line.strip()
+            if not line:
+                continue
+            # A source preference is deliberately one URL per line. Requiring
+            # an absolute HTTP(S) URL prevents prose or multiple URLs on one
+            # line from being silently interpreted as a domain hint.
+            if len(re.findall(r"https?://", line, flags=re.IGNORECASE)) != 1:
+                invalid_lines.append(line)
+                continue
+            if any(char.isspace() for char in line):
+                invalid_lines.append(line)
+                continue
+            try:
+                parsed = urlparse(line)
+                hostname = parsed.hostname
+                # Accessing ``port`` validates malformed numeric ports too.
+                _ = parsed.port
+            except ValueError:
+                parsed = None
+                hostname = None
+            if (
+                parsed is None
+                or parsed.scheme.lower() not in {"http", "https"}
+                or not hostname
+            ):
+                invalid_lines.append(line)
+        if invalid_lines:
+            raise ValueError(
+                "网址来源偏好必须每行填写一个有效的 http(s) 网址，"
+                "不能填写多个网址或非网址内容"
+            )
+        return value
 
 
 def source_type(config: dict[str, Any]) -> Literal["crawler", "web_search"]:
