@@ -103,6 +103,32 @@ class TaskRead(BaseModel):
         return _as_shanghai_time(value)
 
 
+class ScheduleCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    frequency: str = Field(pattern="^(daily|weekly|monthly)$")
+    hour: int = Field(ge=0, le=23)
+    weekday: int | None = Field(default=None, ge=0, le=6)
+    monthday: int | None = Field(default=None, ge=1, le=31)
+    start_date: date = date.fromisoformat(DEFAULT_START_DATE)
+    source_ids: list[int] = Field(min_length=1)
+    enabled: bool = True
+
+    @field_validator("source_ids")
+    @classmethod
+    def unique_sources(cls, value: list[int]) -> list[int]:
+        return list(dict.fromkeys(value))
+
+
+class ScheduleRead(ScheduleCreate):
+    id: int
+    last_run_at: datetime | None = None
+    created_at: datetime
+
+    @field_serializer("last_run_at", "created_at")
+    def serialize_schedule_time(self, value: datetime | None) -> datetime | None:
+        return _as_shanghai_time(value)
+
+
 class LogRead(BaseModel):
     model_config = ConfigDict(from_attributes=True)
     id: int

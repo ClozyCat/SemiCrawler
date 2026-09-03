@@ -1,6 +1,6 @@
 ﻿import React, { useCallback, useEffect, useMemo, useState, useRef } from 'react'
 import {
-  Activity, BookOpen, CalendarDays, CheckCircle2, ChevronDown, ChevronRight,
+  Activity, BookOpen, CalendarClock, CalendarDays, CalendarRange, CheckCircle2, ChevronDown, ChevronRight,
   Database, Download, ExternalLink, FileJson, FileSpreadsheet, History,
   LayoutDashboard, ListFilter, LoaderCircle, Menu, Plus, RefreshCw, Search,
   Settings, SlidersHorizontal, X, Eye, FlaskConical, Save, Trash2, Tags, Upload,
@@ -19,6 +19,7 @@ const NAV_GROUPS = [
     title: '业务中心',
     items: [
       { id: 'dashboard', label: '采集工作台', icon: LayoutDashboard },
+      { id: 'schedules', label: '定时任务', icon: Clock },
       { id: 'history', label: '数据归档', icon: Database },
       { id: 'analytics', label: '关联洞察', icon: Network },
     ]
@@ -64,6 +65,12 @@ const DASHSCOPE_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 const BAIDU_BASE_URL = 'https://qianfan.baidubce.com'
 const TAVILY_BASE_URL = 'https://api.tavily.com'
 const ANYSEARCH_BASE_URL = 'https://api.anysearch.com'
+
+const SEARCH_PROVIDERS = [
+  { id: 'anysearch', label: 'Anysearch', tag: '默认', mark: 'A', desc: '多源聚合检索，综合覆盖面广' },
+  { id: 'baidu', label: '百度', tag: '国内', mark: '百', desc: '中文语义友好，国内站点收录良好' },
+  { id: 'tavily', label: 'Tavily', tag: '海外', mark: 'T', desc: '面向 AI 优化，英文资讯质量高' },
+]
 
 function searchProviderLabel(provider) {
   return provider === 'baidu' ? '百度' : provider === 'tavily' ? 'Tavily' : 'Anysearch'
@@ -289,55 +296,73 @@ function SourceForm({ source, onClose, onSaved }) {
               )}
             </>
           ) : (
-            <div className="search-source-fields full form-grid">
-              <label className="field">
-                <span>搜索引擎</span>
-                <select
-                  value={form.search_provider}
-                  onChange={(e) => setForm({ ...form, search_provider: e.target.value })}
-                >
-                  <option value="anysearch">Anysearch（默认）</option>
-                  <option value="baidu">百度搜索</option>
-                  <option value="tavily">Tavily</option>
-                </select>
-              </label>
-              <label className="field full">
-                <span>检索主题与关键意图</span>
-                <textarea
-                  required
-                  rows={4}
-                  value={form.search_query}
-                  onChange={(e) => setForm({ ...form, search_query: e.target.value })}
-                  placeholder="例如：检索中国大陆先进封装、Chiplet 项目的签约、开工和扩产动态，关注投资金额、项目地点与产能。"
-                />
-              </label>
-              <label className="field full">
-                <span>网址来源偏好与提示 (可选)</span>
-                <textarea
-                  rows={3}
-                  value={form.source_hint}
-                  onChange={(e) => setForm({ ...form, source_hint: e.target.value })}
-                  placeholder="例如：优先政府、开发区与企业官网；重点检索 gov.cn、公司新闻中心，也可粘贴具体网址。"
-                />
-              </label>
-              <label className="field">
-                <span>检索条数上限</span>
-                <input
-                  required
-                  type="number"
-                  min="1"
-                  max="20"
-                  step="1"
-                  value={form.max_results}
-                  onChange={(e) => setForm({ ...form, max_results: e.target.value })}
-                />
-              </label>
-              <div className="source-mode-note full">
-                <Globe2 />
-                <span>
-                  任务执行时由 {searchProviderLabel(form.search_provider)} 执行搜索，
-                  经索引审阅与网页正文读取后，由 AI 大模型生成可追溯要素记录。
-                </span>
+            <div className="search-source-fields full">
+              <div className="search-field-block">
+                <div className="search-block-label"><span className="block-icon"><Globe2 /></span><b>选择搜索引擎</b><span>检索请求将由所选引擎发出</span></div>
+                <div className="engine-picker">
+                  {SEARCH_PROVIDERS.map(({ id, label, tag, mark, desc }) => {
+                    const active = form.search_provider === id
+                    return (
+                      <label className={`engine-card eng-${id}${active ? ' active' : ''}`} key={id}>
+                        <input type="radio" name="search_provider" checked={active} onChange={() => setForm({ ...form, search_provider: id })} />
+                        <span className="engine-mark" aria-hidden>{mark}</span>
+                        <span className="engine-copy">
+                          <span className="engine-name-row"><b>{label}</b><i>{tag}</i></span>
+                          <small>{desc}</small>
+                        </span>
+                        <span className="engine-radio" aria-hidden />
+                      </label>
+                    )
+                  })}
+                </div>
+              </div>
+
+              <div className="search-field-block">
+                <div className="search-block-label"><span className="block-icon"><Search /></span><b>检索意图</b><span>主题越明确，命中越精准</span></div>
+                <div className="search-fields form-grid">
+                  <label className="field full">
+                    <span>检索主题与关键意图</span>
+                    <textarea
+                      required
+                      rows={4}
+                      value={form.search_query}
+                      onChange={(e) => setForm({ ...form, search_query: e.target.value })}
+                      placeholder="例如：半导体项目，可补充时间、地区、产业环节等限定条件"
+                    />
+                  </label>
+                  <label className="field full">
+                    <span>网址来源偏好 <em className="opt-flag">可选</em></span>
+                    <textarea
+                      rows={2}
+                      value={form.source_hint}
+                      onChange={(e) => setForm({ ...form, source_hint: e.target.value })}
+                      placeholder="例如：yixing.gov.cn，多个域名用换行分隔"
+                    />
+                  </label>
+                  <div className="search-params full">
+                    <label className="field">
+                      <span>检索条数上限</span>
+                      <input
+                        required
+                        type="number"
+                        min="1"
+                        max="20"
+                        step="1"
+                        value={form.max_results}
+                        onChange={(e) => setForm({ ...form, max_results: e.target.value })}
+                      />
+                    </label>
+                    <div className="field-note"><Info />建议不超过 20 条：结果将逐条抓取正文快照，数量越多采集耗时越长。</div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="search-delivery">
+                <span className="delivery-mark"><Sparkles /></span>
+                <p>
+                  任务执行时由 <b>{searchProviderLabel(form.search_provider)}</b> 抓取至多{' '}
+                  <b>{form.max_results || '—'}</b> 条候选，经索引审阅与正文读取后，由 AI 大模型生成可追溯要素记录。
+                </p>
               </div>
             </div>
           )}
@@ -1576,9 +1601,17 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
         </div>
         {sources.map((source) => {
           const isSearch = source.source_type === 'web_search'
+          const engine = sourceSearchProvider(source)
+          const engineTint = isSearch ? `e-${engine}` : ''
+          const mark = isSearch ? <Globe2 /> : source.builtin ? <Building2 /> : <Rss />
           return (
             <div className="management-row" key={source.id}>
-              <b>{source.name}</b>
+              <div className="source-name-cell">
+                <span className={`row-mark ${engineTint || (source.builtin ? 'builtin' : 'custom')}`} aria-hidden>
+                  {mark}
+                </span>
+                <b title={source.name}>{source.name}</b>
+              </div>
               <div>
                 {isSearch ? (
                   <span className="source-query" title={source.config?.query}>
@@ -1596,12 +1629,16 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
                   </a>
                 )}
               </div>
-              <span>
-                <span className={`source-kind ${isSearch ? 'web-search' : 'custom'}`}>
-                  {isSearch
-                    ? `🌐 联网 · ${searchProviderLabel(sourceSearchProvider(source))}`
-                    : source.builtin ? '🏢 内置站点' : '🕷️ 自定义采集'}
+              <span className="kind-cell">
+                <span className={`source-kind ${isSearch ? 'web-search' : source.builtin ? 'builtin-site' : 'custom'}`}>
+                  {mark}
+                  {isSearch ? '联网检索' : source.builtin ? '内置站点' : '自定义采集'}
                 </span>
+                {isSearch && (
+                  <small className={`engine-sub ${engineTint}`}>
+                    <i />{searchProviderLabel(engine)} · 联网引擎
+                  </small>
+                )}
               </span>
               <div className="source-toggle">
                 <label className="switch">
@@ -2164,6 +2201,233 @@ function RecordDetailModal({ id, meta, onClose, onSaved }) {
   )
 }
 
+const SCHEDULE_FREQUENCIES = [
+  { value: 'daily', label: '每天', icon: CalendarDays },
+  { value: 'weekly', label: '每周', icon: CalendarRange },
+  { value: 'monthly', label: '每月', icon: CalendarClock },
+]
+const WEEKDAY_LETTERS = ['日', '一', '二', '三', '四', '五', '六']
+
+function scheduleText(item) {
+  const time = `${String(item.hour).padStart(2, '0')}:00`
+  if (item.frequency === 'daily') return `每天 ${time}`
+  if (item.frequency === 'weekly') return `每周${WEEKDAY_LETTERS[item.weekday]} ${time}`
+  return `每月 ${item.monthday} 日 ${time}`
+}
+
+// 下一次执行时间（本地时区，按整点粒度推算，最多向后扫描 400 天）
+function nextRunAt(item) {
+  const now = new Date()
+  for (let offset = 0; offset < 400; offset += 1) {
+    const day = new Date(now.getFullYear(), now.getMonth(), now.getDate() + offset)
+    if (item.frequency === 'weekly' && day.getDay() !== item.weekday) continue
+    if (item.frequency === 'monthly' && day.getDate() !== item.monthday) continue
+    const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), item.hour)
+    if (at > now) return at
+  }
+  return null
+}
+
+function nextRunLabel(item) {
+  if (!item.enabled) return ''
+  const at = nextRunAt(item)
+  if (!at) return ''
+  const today = new Date()
+  const dayDiff = Math.round((new Date(at.getFullYear(), at.getMonth(), at.getDate()) - new Date(today.getFullYear(), today.getMonth(), today.getDate())) / 864e5)
+  const time = `${String(at.getHours()).padStart(2, '0')}:00`
+  if (dayDiff === 0) return `今天 ${time}`
+  if (dayDiff === 1) return `明天 ${time}`
+  if (dayDiff < 7) return `周${WEEKDAY_LETTERS[at.getDay()]} ${time}`
+  return `${at.getMonth() + 1}月${at.getDate()}日 ${time}`
+}
+
+function shortMoment(value) {
+  if (!value) return '—'
+  const d = new Date(value)
+  const sameYear = d.getFullYear() === new Date().getFullYear()
+  const hhmm = `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return sameYear ? `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}` : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
+}
+
+function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
+  const [form, setForm] = useState({ name: '', frequency: 'daily', hour: 9, weekday: 1, monthday: 1, start_date: DEFAULT_DATE, source_ids: [], enabled: true })
+  const [saving, setSaving] = useState(false)
+
+  const enabledSources = sources.filter((source) => source.enabled)
+
+  const submit = async (event) => {
+    event.preventDefault()
+    if (!form.source_ids.length) return
+    setSaving(true)
+    try {
+      await onCreate({ ...form, name: form.name.trim() || `${scheduleText(form)} 采集` })
+      setForm({ ...form, name: '', source_ids: [] })
+    } finally {
+      setSaving(false)
+    }
+  }
+  const toggleSource = (id) => setForm((old) => ({
+    ...old,
+    source_ids: old.source_ids.includes(id)
+      ? old.source_ids.filter((item) => item !== id)
+      : [...old.source_ids, id]
+  }))
+  const setHour = (event) => setForm({ ...form, hour: Number(event.target.value) })
+
+  return (
+    <>
+      <div className="title-row">
+        <div className="title-content"><span className="eyebrow">自动调度</span><h1>定时任务</h1><p>按计划创建采集任务，执行时自动采用最新关键词与 API 配置。</p></div>
+      </div>
+
+      <div className="schedules-layout">
+        <section className="panel schedule-builder">
+          <div className="panel-head">
+            <div>
+              <h2><span className="head-badge"><CalendarClock /></span>创建定时任务</h2>
+              <p>设定执行节奏与覆盖范围，保存后立即生效</p>
+            </div>
+          </div>
+          <form className="schedule-form" onSubmit={submit}>
+            <div className="form-block">
+              <div className="block-label"><span className="step-no">01</span>基础设置</div>
+              <div className="block-fields">
+                <label className="field">
+                  <span>任务名称</span>
+                  <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：每日产业动态采集" />
+                  <small className="field-aside">留空将按执行计划自动命名</small>
+                </label>
+                <label className="field">
+                  <span>资讯起始日期</span>
+                  <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+                </label>
+              </div>
+            </div>
+            <div className="form-block">
+              <div className="block-label"><span className="step-no">02</span>执行计划</div>
+              <div className="freq-seg" role="radiogroup" aria-label="执行频率">
+                {SCHEDULE_FREQUENCIES.map(({ value, label, icon: Icon }) => (
+                  <button type="button" key={value} className={form.frequency === value ? 'active' : ''} onClick={() => setForm({ ...form, frequency: value })}>
+                    <Icon />{label}
+                  </button>
+                ))}
+              </div>
+              <div className={`freq-opts${form.frequency === 'daily' ? ' single' : ''}`}>
+                {form.frequency !== 'daily' && (
+                  <label className="field">
+                    <span>{form.frequency === 'weekly' ? '星期' : '日期'}</span>
+                    {form.frequency === 'weekly' ? (
+                      <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>
+                        {WEEKDAY_LETTERS.map((letter, index) => <option key={letter} value={index}>星期{letter}</option>)}
+                      </select>
+                    ) : (
+                      <select value={form.monthday} onChange={(e) => setForm({ ...form, monthday: Number(e.target.value) })}>
+                        {Array.from({ length: 31 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 日</option>)}
+                      </select>
+                    )}
+                  </label>
+                )}
+                <label className="field">
+                  <span>执行时间</span>
+                  <select value={form.hour} onChange={setHour}>
+                    {Array.from({ length: 24 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}:00</option>)}
+                  </select>
+                </label>
+              </div>
+              <div className="schedule-preview"><CalendarClock /><p>执行计划 <b>{scheduleText(form)}</b> · 自 <b>{form.start_date}</b> 起回溯</p></div>
+            </div>
+            <div className="form-block">
+              <div className="block-label"><span className="step-no">03</span>覆盖信息源 <em className="block-count">{form.source_ids.length} 已选</em></div>
+              <div className="source-picker">
+                {enabledSources.map((source) => {
+                  const isSearch = source.source_type === 'web_search'
+                  const checked = form.source_ids.includes(source.id)
+                  return (
+                    <label className={`source-option${checked ? ' checked' : ''}`} key={source.id}>
+                      <input type="checkbox" checked={checked} onChange={() => toggleSource(source.id)} />
+                      <span className="pick-mark">{checked && <Check />}</span>
+                      <span className="option-copy">
+                        <b title={source.name}>{source.name}</b>
+                        <small>{source.config?.query ? `联网检索 · ${source.config.query}` : source.builtin ? '内置站点 · 官方维护' : '自定义采集 · 自维护选择器'}</small>
+                      </span>
+                      <span className={`pick-tag ${isSearch ? 'search' : source.builtin ? 'builtin' : 'custom'}`}>{isSearch ? <Globe2 /> : <Rss />}{isSearch ? '联网' : '爬虫'}</span>
+                    </label>
+                  )
+                })}
+                {!enabledSources.length && (
+                  <div className="picker-empty"><Rss /><span>暂无启用的信息源，请先在「信息源管理」中添加并启用。</span></div>
+                )}
+              </div>
+              <p className="block-foot-note"><ShieldCheck /> 规则存在期间，覆盖的信息源将受到删除保护；仅列出已启用的信息源。</p>
+              <button className="primary schedule-submit" disabled={saving || !form.source_ids.length}>
+                {saving ? <LoaderCircle className="spin" /> : <Clock />}{saving ? '正在创建...' : '创建定时任务'}
+              </button>
+            </div>
+          </form>
+        </section>
+
+        <section className="panel schedule-registry">
+          <div className="panel-head">
+            <div>
+              <h2>已创建的定时任务</h2>
+              <p>共 {schedules.length} 条调度规则 · 每次执行自动采用最新关键词与 API 配置</p>
+            </div>
+          </div>
+          {!schedules.length ? (
+            <div className="blank compact"><Clock /><b>尚未创建定时任务</b><span>在左侧设置执行频率与覆盖信息源后，调度器将按时自动启动采集。</span></div>
+          ) : (
+            <div className="schedule-cards">
+              {schedules.map((item) => {
+                const FreqIcon = SCHEDULE_FREQUENCIES.find((option) => option.value === item.frequency)?.icon || CalendarDays
+                return (
+                  <article className={`schedule-card${item.enabled ? '' : ' off'}`} key={item.id}>
+                    <div className="schedule-card-top">
+                      <span className={`sched-freq-icon freq-${item.frequency}`}><FreqIcon /></span>
+                      <div className="sched-main">
+                        <b className="sched-name" title={item.name}>{item.name}</b>
+                        <span className="sched-schedule">{scheduleText(item)} · 起始 {item.start_date}</span>
+                      </div>
+                      <span className={`sched-state ${item.enabled ? 'on' : 'off'}`}>{item.enabled ? '启用中' : '已暂停'}</span>
+                    </div>
+                    <div className="sched-chips">
+                      {item.source_ids.map((id, index) => {
+                        if (index >= 2 && item.source_ids.length > 3) return null
+                        if (index === 2 && item.source_ids.length > 3) {
+                          return <span className="src-chip" key="more">+{item.source_ids.length - 2} 个来源</span>
+                        }
+                        const source = sources.find((entry) => entry.id === id)
+                        const search = source?.source_type === 'web_search'
+                        return (
+                          <span className={`src-chip${search ? ' search' : ''}`} key={id} title={source?.name || `来源 #${id}`}>
+                            {search ? <Globe2 /> : <Rss />}{source?.name || `来源 #${id}`}
+                          </span>
+                        )
+                      })}
+                    </div>
+                    <div className="schedule-card-foot">
+                      <div className="sched-runline">
+                        <span className="sched-run next"><CalendarClock /><i>下次执行</i><b>{nextRunLabel(item) || '等待启用'}</b></span>
+                        <span className="sched-run"><History /><i>上次运行</i><b>{shortMoment(item.last_run_at)}</b></span>
+                      </div>
+                      <div className="schedule-actions">
+                        <label className="switch" title={item.enabled ? '暂停该规则' : '恢复该规则'}>
+                          <input type="checkbox" checked={item.enabled} onChange={(e) => onUpdate(item.id, { ...item, enabled: e.target.checked })} aria-label={`${item.enabled ? '暂停' : '启用'}定时任务 ${item.name}`} />
+                          <i />
+                        </label>
+                        <button className="icon-btn source-delete" title="删除定时任务" aria-label={`删除定时任务 ${item.name}`} onClick={() => onDelete(item)}><Trash2 /></button>
+                      </div>
+                    </div>
+                  </article>
+                )
+              })}
+            </div>
+          )}
+        </section>
+      </div>
+    </>
+  )
+}
+
 function SettingsView() {
   const [form, setForm] = useState({
     base_url: DASHSCOPE_BASE_URL,
@@ -2406,6 +2670,7 @@ export default function App() {
   const [meta, setMeta] = useState({ default_start_date: DEFAULT_DATE, info_types: [] })
   const [sources, setSources] = useState([])
   const [tasks, setTasks] = useState([])
+  const [schedules, setSchedules] = useState([])
   const [records, setRecords] = useState({ items: [], total: 0 })
   const [dashboardRecords, setDashboardRecords] = useState({ items: [], total: 0 })
   const [analytics, setAnalytics] = useState(null)
@@ -2430,16 +2695,18 @@ export default function App() {
 
   const load = useCallback(async () => {
     try {
-      const [metaData, sourceData, taskData, settingData, recentRecords] = await Promise.all([
+      const [metaData, sourceData, taskData, scheduleData, settingData, recentRecords] = await Promise.all([
         api.meta(),
         api.sources(),
         api.tasks(),
+        api.schedules(),
         api.modelSetting(),
         api.records({ limit: 5 })
       ])
       setMeta(metaData)
       setSources(sourceData)
       setTasks(taskData)
+      setSchedules(scheduleData)
       setKeywordSetting(settingData)
       setDashboardRecords(recentRecords)
     } catch (err) {
@@ -2527,6 +2794,30 @@ export default function App() {
     } finally {
       setCreating(false)
     }
+  }
+
+  const createSchedule = async (payload) => {
+    setError('')
+    try {
+      await api.createSchedule(payload)
+      setSchedules(await api.schedules())
+    } catch (err) { setError(err.message); throw err }
+  }
+
+  const updateSchedule = async (id, payload) => {
+    setError('')
+    try {
+      const updated = await api.updateSchedule(id, payload)
+      setSchedules((old) => old.map((item) => item.id === id ? updated : item))
+    }
+    catch (err) { setError(err.message) }
+  }
+
+  const deleteSchedule = async (item) => {
+    if (!window.confirm(`确定删除定时任务“${item.name}”吗？`)) return
+    setError('')
+    try { await api.deleteSchedule(item.id); setSchedules((old) => old.filter((entry) => entry.id !== item.id)) }
+    catch (err) { setError(err.message) }
   }
 
   const showLogs = async (id) => {
@@ -2729,6 +3020,8 @@ export default function App() {
               onDelete={deleteSource}
               deletingIds={deletingSourceIds}
             />
+          ) : view === 'schedules' ? (
+            <SchedulesView schedules={schedules} sources={sources} onCreate={createSchedule} onUpdate={updateSchedule} onDelete={deleteSchedule} />
           ) : view === 'keywords' ? (
             <KeywordsView setting={keywordSetting} onSaved={setKeywordSetting} />
           ) : view === 'history' ? (

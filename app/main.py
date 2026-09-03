@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 import re
 import threading
+import time
+from datetime import datetime, timedelta, timezone
 from contextlib import asynccontextmanager
 from datetime import date
 from io import BytesIO
@@ -22,6 +24,7 @@ from .exporting import make_csv, make_xlsx
 from .llm import structure_article
 from .models import (
     CollectionTask,
+    ScheduledTask,
     ExportRecord,
     ModelSetting,
     RawArticle,
@@ -51,6 +54,8 @@ from .schemas import (
     StructureResult,
     TaskCreate,
     TaskRead,
+    ScheduleCreate,
+    ScheduleRead,
 )
 from .seed import seed_default_sources
 from .source_config import source_type, validate_source_config
@@ -58,10 +63,14 @@ from .source_config import source_type, validate_source_config
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
+    global _SCHEDULER_STARTED
     Base.metadata.create_all(engine)
     migrate_legacy_database()
     with SessionLocal() as db:
         seed_default_sources(db)
+    if not _SCHEDULER_STARTED:
+        _SCHEDULER_STARTED = True
+        threading.Thread(target=_schedule_loop, daemon=True).start()
     yield
 
 
@@ -75,6 +84,7 @@ app.add_middleware(
 )
 
 _TASK_EXECUTION_LOCK = threading.Lock()
+_SCHEDULER_STARTED = False
 
 
 def source_read(source: Source) -> SourceRead:
@@ -235,6 +245,9 @@ def delete_source(source_id: int, db: Session = Depends(get_db)):
     ).all()
     if any(source_id in json.loads(task.source_ids_json) for task in active_tasks):
         raise HTTPException(409, "该信息源正被采集任务使用，请等待任务结束后再删除")
+    schedules = db.scalars(select(ScheduledTask)).all()
+    if any(source_id in json.loads(item.source_ids_json) for item in schedules):
+        raise HTTPException(409, "该信息源已被定时任务使用，请先停用或删除相关定时任务")
 
     db.execute(delete(SourceVersion).where(SourceVersion.source_id == source_id))
     db.delete(source)
@@ -318,6 +331,67 @@ def create_task(
     db.refresh(task)
     background_tasks.add_task(_run_task_background, task.id)
     return task_read(task)
+
+
+def _schedule_read(item: ScheduledTask) -> ScheduleRead:
+    return ScheduleRead.model_validate({"id": item.id, "name": item.name, "frequency": item.frequency, "hour": item.hour, "weekday": item.weekday, "monthday": item.monthday, "start_date": item.start_date, "source_ids": json.loads(item.source_ids_json), "enabled": item.enabled, "last_run_at": item.last_run_at, "created_at": item.created_at})
+
+
+@app.get("/api/schedules", response_model=list[ScheduleRead])
+def list_schedules(db: Session = Depends(get_db)):
+    return [_schedule_read(item) for item in db.scalars(select(ScheduledTask).order_by(ScheduledTask.id.desc())).all()]
+
+
+@app.post("/api/schedules", response_model=ScheduleRead, status_code=201)
+def create_schedule(payload: ScheduleCreate, db: Session = Depends(get_db)):
+    if payload.frequency == "weekly" and payload.weekday is None:
+        raise HTTPException(422, "每周定时任务必须指定星期")
+    if payload.frequency == "monthly" and payload.monthday is None:
+        raise HTTPException(422, "每月定时任务必须指定日期")
+    sources = db.scalars(select(Source).where(Source.id.in_(payload.source_ids), Source.enabled.is_(True))).all()
+    if len(sources) != len(payload.source_ids):
+        raise HTTPException(400, "部分来源不存在或未启用")
+    item = ScheduledTask(**payload.model_dump(exclude={"source_ids"}), source_ids_json=json.dumps(payload.source_ids))
+    db.add(item); db.commit(); db.refresh(item)
+    return _schedule_read(item)
+
+
+@app.patch("/api/schedules/{schedule_id}", response_model=ScheduleRead)
+def update_schedule(schedule_id: int, payload: ScheduleCreate, db: Session = Depends(get_db)):
+    item = db.get(ScheduledTask, schedule_id)
+    if not item: raise HTTPException(404, "定时任务不存在")
+    values = payload.model_dump(exclude={"source_ids"})
+    sources = db.scalars(select(Source).where(Source.id.in_(payload.source_ids), Source.enabled.is_(True))).all()
+    if len(sources) != len(payload.source_ids): raise HTTPException(400, "部分来源不存在或未启用")
+    for key, value in values.items(): setattr(item, key, value)
+    item.source_ids_json = json.dumps(payload.source_ids)
+    db.commit(); db.refresh(item); return _schedule_read(item)
+
+
+@app.delete("/api/schedules/{schedule_id}")
+def delete_schedule(schedule_id: int, db: Session = Depends(get_db)):
+    item = db.get(ScheduledTask, schedule_id)
+    if not item: raise HTTPException(404, "定时任务不存在")
+    db.delete(item); db.commit(); return {"deleted": 1}
+
+
+def _schedule_loop() -> None:
+    while True:
+        try:
+            now = datetime.now(timezone.utc).astimezone(timezone(timedelta(hours=8)))
+            with SessionLocal() as db:
+                for item in db.scalars(select(ScheduledTask).where(ScheduledTask.enabled.is_(True))).all():
+                    due = now.hour == item.hour and (item.frequency == "daily" or (item.frequency == "weekly" and now.weekday() == item.weekday) or (item.frequency == "monthly" and now.day == item.monthday))
+                    if due and (not item.last_run_at or item.last_run_at.date() != now.date()):
+                        sources = db.scalars(select(Source).where(Source.id.in_(json.loads(item.source_ids_json)), Source.enabled.is_(True))).all()
+                        if len(sources) == len(json.loads(item.source_ids_json)):
+                            task_payload = TaskCreate(source_ids=json.loads(item.source_ids_json), start_date=item.start_date)
+                            created = create_task(task_payload, BackgroundTasks(), db)
+                            item.last_run_at = utc_now(); db.commit()
+                            _run_task_background(created.id)
+        except Exception:
+            pass
+        time.sleep(30)
 
 
 def _run_task_background(task_id: int) -> None:

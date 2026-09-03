@@ -85,6 +85,21 @@ class CollectionTask(Base):
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
+class ScheduledTask(Base):
+    __tablename__ = "scheduled_tasks"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    name: Mapped[str] = mapped_column(String(120))
+    frequency: Mapped[str] = mapped_column(String(20))
+    hour: Mapped[int] = mapped_column(Integer, default=0)
+    weekday: Mapped[int | None] = mapped_column(Integer)
+    monthday: Mapped[int | None] = mapped_column(Integer)
+    start_date: Mapped[date] = mapped_column(Date)
+    source_ids_json: Mapped[str] = mapped_column(Text)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
+    last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)
+
+
 class TaskLog(Base):
     __tablename__ = "task_logs"
     id: Mapped[int] = mapped_column(primary_key=True)

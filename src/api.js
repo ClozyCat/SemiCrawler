@@ -104,6 +104,10 @@ export const api = {
   terminateTask: (id) => request(`/tasks/${id}/terminate`, { method: 'POST' }),
   logs: (id) => request(`/tasks/${id}/logs`),
   deleteTasks: (ids) => request('/tasks', { method: 'DELETE', body: JSON.stringify({ ids }) }),
+  schedules: () => request('/schedules'),
+  createSchedule: (item) => request('/schedules', { method: 'POST', body: JSON.stringify(item) }),
+  updateSchedule: (id, item) => request(`/schedules/${id}`, { method: 'PATCH', body: JSON.stringify(item) }),
+  deleteSchedule: (id) => request(`/schedules/${id}`, { method: 'DELETE' }),
   records: (params = {}) => {
     const query = queryString(params)
     return request(`/records?${query}`)

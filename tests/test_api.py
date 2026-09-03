@@ -98,6 +98,39 @@ def test_source_delete_rejects_builtin_and_source_with_articles(client):
     assert response.json()["detail"] == "该信息源已有原始数据，请先删除相关原始数据"
 
 
+def test_scheduled_task_protects_its_source_and_can_be_managed(client):
+    created = client.post(
+        "/api/sources",
+        json={
+            "name": "定时任务测试来源",
+            "base_url": "https://example.org",
+            "config": {
+                "entry_urls": ["https://example.org/news"],
+                "article_url_pattern": "/news/",
+                "selectors": {"list_links": "a", "title": "h1", "date": ".date", "content": "article"},
+                "request": {"rate_limit_per_minute": 10, "timeout_seconds": 10},
+            },
+        },
+    ).json()
+    scheduled = client.post(
+        "/api/schedules",
+        json={
+            "name": "每日测试采集",
+            "frequency": "daily",
+            "hour": 9,
+            "start_date": "2026-08-01",
+            "source_ids": [created["id"]],
+        },
+    )
+    assert scheduled.status_code == 201
+    assert client.get("/api/schedules").json()[0]["frequency"] == "daily"
+    blocked = client.delete(f"/api/sources/{created['id']}")
+    assert blocked.status_code == 409
+    assert "定时任务" in blocked.json()["detail"]
+    assert client.delete(f"/api/schedules/{scheduled.json()['id']}").status_code == 200
+    assert client.delete(f"/api/sources/{created['id']}").status_code == 200
+
+
 def test_web_search_source_uses_simple_natural_language_config(client):
     response = client.post(
         "/api/sources",
