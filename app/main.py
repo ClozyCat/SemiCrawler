@@ -148,7 +148,7 @@ def create_source(payload: SourceCreate, db: Session = Depends(get_db)):
         raise HTTPException(409, "来源名称已存在")
     candidate_config = dict(payload.config)
     if source_type(candidate_config) == "web_search":
-        candidate_config.setdefault("provider", "baidu")
+        candidate_config.setdefault("provider", "anysearch")
     try:
         validated_config = validate_source_config(str(payload.base_url), candidate_config)
     except ValueError as exc:
@@ -755,6 +755,13 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
             if setting.tavily_api_key
             else ""
         ),
+        has_anysearch_api_key=bool(setting.anysearch_api_key),
+        anysearch_api_key_hint=(
+            "*" * max(len(setting.anysearch_api_key) - 4, 0)
+            + setting.anysearch_api_key[-4:]
+            if setting.anysearch_api_key
+            else ""
+        ),
         request_headers=json.loads(setting.request_headers_json or "[]"),
         keyword_config=json.loads(setting.keyword_config_json or "[]"),
         keyword_filter_enabled=bool(setting.keyword_filter_enabled),
@@ -791,6 +798,8 @@ def update_model_setting(payload: ModelSettingUpdate, db: Session = Depends(get_
         setting.baidu_api_key = payload.baidu_api_key.strip()
     if payload.tavily_api_key is not None and payload.tavily_api_key.strip():
         setting.tavily_api_key = payload.tavily_api_key.strip()
+    if payload.anysearch_api_key is not None and payload.anysearch_api_key.strip():
+        setting.anysearch_api_key = payload.anysearch_api_key.strip()
     db.add(setting)
     db.commit()
     db.refresh(setting)

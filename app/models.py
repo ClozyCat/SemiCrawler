@@ -54,6 +54,7 @@ class ModelSetting(Base):
     api_key: Mapped[str] = mapped_column(Text, default="")
     baidu_api_key: Mapped[str] = mapped_column(Text, default="")
     tavily_api_key: Mapped[str] = mapped_column(Text, default="")
+    anysearch_api_key: Mapped[str] = mapped_column(Text, default="")
     request_headers_json: Mapped[str] = mapped_column(Text, default="[]")
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     keyword_config_json: Mapped[str] = mapped_column(Text, default="[]")

@@ -18,6 +18,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from .baidu import BaiduClient, BaiduError
+from .anysearch import AnySearchClient, AnySearchError
 from .llm import (
     ModelOutputError,
     plan_search_queries,
@@ -292,10 +293,14 @@ def collect_web_search_source(
         search_client = BaiduClient(setting.baidu_api_key or None)
         provider_name = "百度"
         provider_error = BaiduError
-    else:
+    elif config.provider == "tavily":
         search_client = TavilyClient(setting.tavily_api_key or None)
         provider_name = "Tavily"
         provider_error = TavilyError
+    else:
+        search_client = AnySearchClient(setting.anysearch_api_key or None)
+        provider_name = "AnySearch"
+        provider_error = AnySearchError
     try:
         planned_queries = plan_search_queries(
             setting,
@@ -395,6 +400,13 @@ def collect_web_search_source(
     prefiltered_results = []
     index_date_filtered = 0
     for item in results:
+        if domains:
+            hostname = (urlparse(str(item.url)).hostname or "").lower()
+            if not any(
+                hostname == domain or hostname.endswith(f".{domain}")
+                for domain in domains
+            ):
+                continue
         published_at = parse_search_result_date(item.published_date)
         if published_at and published_at < task.start_date:
             index_date_filtered += 1

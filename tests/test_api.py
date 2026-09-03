@@ -119,15 +119,15 @@ def test_web_search_source_uses_simple_natural_language_config(client):
         response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
     )
     assert response.json()["config"]["max_results"] == 20
-    assert response.json()["config"]["provider"] == "baidu"
+    assert response.json()["config"]["provider"] == "anysearch"
 
 
-def test_web_search_source_defaults_to_baidu(client):
+def test_web_search_source_defaults_to_anysearch(client):
     response = client.post(
         "/api/sources",
         json={
-            "name": "百度联网搜索",
-            "base_url": "https://qianfan.baidubce.com",
+            "name": "Anysearch联网搜索",
+            "base_url": "https://api.anysearch.com",
             "config": {
                 "type": "web_search",
                 "query": "检索中国半导体项目动态",
@@ -136,7 +136,7 @@ def test_web_search_source_defaults_to_baidu(client):
     )
 
     assert response.status_code == 201
-    assert response.json()["config"]["provider"] == "baidu"
+    assert response.json()["config"]["provider"] == "anysearch"
 
 
 def test_task_snapshot_and_logs(client, monkeypatch):
@@ -580,6 +580,7 @@ def test_model_setting_masks_secret(client):
             "model_name": "test-model",
             "api_key": "sk-secret1234",
             "baidu_api_key": "baidu-secret5678",
+            "anysearch_api_key": "as_sk-secret5678",
             "request_headers": [
                 {"key": "X-API-Version", "value": "2026-08-01"},
             ],
@@ -591,6 +592,8 @@ def test_model_setting_masks_secret(client):
     assert response.json()["api_key_hint"].endswith("1234")
     assert response.json()["has_baidu_api_key"] is True
     assert response.json()["baidu_api_key_hint"].endswith("5678")
+    assert response.json()["has_anysearch_api_key"] is True
+    assert response.json()["anysearch_api_key_hint"].endswith("5678")
     assert response.json()["request_headers"] == [
         {"key": "X-API-Version", "value": "2026-08-01"},
     ]

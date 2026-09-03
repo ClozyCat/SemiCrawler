@@ -48,6 +48,7 @@ def migrate_legacy_database() -> None:
         "model_settings": {
             "baidu_api_key": "TEXT DEFAULT ''",
             "tavily_api_key": "TEXT DEFAULT ''",
+            "anysearch_api_key": "TEXT DEFAULT ''",
             "request_headers_json": "TEXT DEFAULT '[]'",
             "keyword_config_json": "TEXT DEFAULT '[]'",
             "keyword_filter_enabled": "BOOLEAN DEFAULT 0",

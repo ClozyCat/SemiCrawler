@@ -25,5 +25,10 @@ if [[ -z "${TAVILY_API_KEY:-}" ]]; then
 else
   echo "Tavily key is configured."
 fi
+if [[ -z "${ANYSEARCH_API_KEY:-}" ]]; then
+  echo "WARN: ANYSEARCH_API_KEY is not set; configure it in API settings."
+else
+  echo "Anysearch key is configured."
+fi
 echo "[3/3] Complete"
 echo "OK: API and search configuration checks completed."
