@@ -77,6 +77,12 @@ class SearchPlan(BaseModel):
         return queries
 
 
+class SearchReview(BaseModel):
+    """Indexes selected by the model as concrete project information."""
+
+    keep: list[int] = Field(default_factory=list)
+
+
 class ModelOutputError(ValueError):
     pass
 
@@ -321,9 +327,10 @@ def plan_search_queries(
         {
             "role": "system",
             "content": (
-                "你是搜索查询规划器。判断用户主题是否需要拆成多个互补查询。"
-                "主题已经明确时只返回一条；包含多个技术、事件类型或同义表达，且单条查询可能漏检时，"
-                "拆成最多五条简洁、可直接提交给搜索引擎的查询。查询必须忠于原主题，不得虚构企业、"
+                "你是搜索查询规划器。把用户主题拆成能最大化搜索召回的互补关键词组合。"
+                "同时覆盖核心产业词、项目/采购/招标/公示等项目表达及常用同义词，例如"
+                "“芯片相关项目”可拆为“芯片”“集成电路 项目 采购”“半导体 公示”。"
+                "返回最多五条简洁、可直接提交给搜索引擎的查询。查询必须忠于原主题，不得虚构企业、"
                 "地点或项目。不要加入 after、before、site 等搜索运算符，系统会统一追加日期和来源限制。"
                 "只输出符合给定 schema 的 JSON。"
             ),
@@ -332,6 +339,38 @@ def plan_search_queries(
     ]
     raw = _call(setting, messages)
     return SearchPlan.model_validate_json(_json_text(raw)).queries
+
+
+def review_search_results(
+    setting: ModelSetting,
+    topic: str,
+    results: list[dict[str, Any]],
+    *,
+    start_date: date | None = None,
+) -> list[int]:
+    """Ask the LLM to screen search indexes before expensive page extraction."""
+    request = {
+        "topic": topic,
+        "start_date": start_date.isoformat() if start_date else None,
+        "results": results,
+        "schema": SearchReview.model_json_schema(),
+    }
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是产业项目情报审阅员。仅保留明确包含项目、产线、工厂、基地等真实产业行动的信息，"
+                "例如立项、签约、投资、开工、建设、投产、扩产、验收。过滤推广性新闻、会议/展会预告、"
+                "活动公告、广告、招聘和纯技术观点；过滤发布日期早于指定起始日期的条目。"
+                "根据输入索引的 0-based index 返回 keep 数组，不要改写索引，不确定就过滤。只输出 JSON。"
+            ),
+        },
+        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+    ]
+    raw = _call(setting, messages)
+    review = SearchReview.model_validate_json(_json_text(raw))
+    valid = set(range(len(results)))
+    return [index for index in dict.fromkeys(review.keep) if index in valid]
 
 
 def _public_model_error(exc: Exception) -> str:

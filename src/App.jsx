@@ -43,7 +43,6 @@ const EMPTY_FORM = {
   search_query: '',
   source_hint: '',
   max_results: 10,
-  preferred_search_engine: 'google',
   config: JSON.stringify({
     entry_urls: ['https://example.com/news'],
     article_url_pattern: '/news/',
@@ -61,16 +60,8 @@ const EMPTY_FORM = {
 }
 
 const DASHSCOPE_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
-const DOKOBOT_BASE_URL = 'https://dokobot.ai'
+const TAVILY_BASE_URL = 'https://api.tavily.com'
 
-const SEARCH_ENGINES = [
-  ['google', 'Google'],
-  ['bing', 'Bing'],
-  ['baidu', '百度'],
-  ['sogou', '搜狗'],
-  ['so360', '360 搜索'],
-]
-const SEARCH_ENGINE_LABELS = Object.fromEntries(SEARCH_ENGINES)
 
 function formatTime(value) {
   if (!value) return '—'
@@ -134,7 +125,6 @@ function SourceForm({ source, onClose, onSaved }) {
     search_query: source.config?.query || '',
     source_hint: source.config?.source_hint || '',
     max_results: source.config?.max_results || 10,
-    preferred_search_engine: source.config?.preferred_search_engine || 'google',
     config: JSON.stringify(source.config, null, 2),
   } : EMPTY_FORM)
   const [error, setError] = useState('')
@@ -151,14 +141,13 @@ function SourceForm({ source, onClose, onSaved }) {
       const query = form.search_query.trim()
       const payload = isSearch ? {
         name: `联网搜索：${query.replace(/\s+/g, ' ').slice(0, 42)}`,
-        base_url: DOKOBOT_BASE_URL,
+        base_url: TAVILY_BASE_URL,
         enabled: form.enabled,
         config: {
           type: 'web_search',
           query,
           source_hint: form.source_hint.trim(),
           max_results: Number(form.max_results),
-          preferred_search_engine: form.preferred_search_engine
         },
       } : {
         name: form.name.trim(),
@@ -216,7 +205,7 @@ function SourceForm({ source, onClose, onSaved }) {
             className={form.mode === 'web_search' ? 'active' : ''}
             onClick={() => setForm({ ...form, mode: 'web_search' })}
           >
-            <Globe2 /> Dokobot 联网搜索
+            <Globe2 /> Tavily 联网搜索
           </button>
         </div>
 
@@ -303,23 +292,12 @@ function SourceForm({ source, onClose, onSaved }) {
                 />
               </label>
               <label className="field">
-                <span>首选搜索引擎</span>
-                <select
-                  value={form.preferred_search_engine}
-                  onChange={(e) => setForm({ ...form, preferred_search_engine: e.target.value })}
-                >
-                  {SEARCH_ENGINES.map(([value, label]) => (
-                    <option key={value} value={value}>{label}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="field">
                 <span>检索条数上限</span>
                 <input
                   required
                   type="number"
                   min="1"
-                  max="100"
+                  max="20"
                   step="1"
                   value={form.max_results}
                   onChange={(e) => setForm({ ...form, max_results: e.target.value })}
@@ -327,7 +305,7 @@ function SourceForm({ source, onClose, onSaved }) {
               </label>
               <div className="source-mode-note full">
                 <Globe2 />
-                <span>任务执行时由 Dokobot 本地引擎自动打开真实搜索页与原始网页，提取正文后经 AI 大模型解析生成可追溯要素记录。</span>
+                <span>任务执行时由 Tavily 搜索、审阅并提取网页正文，经 AI 大模型解析生成可追溯要素记录。</span>
               </div>
             </div>
           )}
@@ -854,7 +832,7 @@ function Dashboard({
         <div className="title-content">
           <span className="eyebrow">情报采集引擎</span>
           <h1>采集工作台</h1>
-          <p>调度多源爬虫与 Dokobot 本地检索，实时沉淀半导体产业高价值情报。</p>
+          <p>调度多源爬虫与 Tavily 联网检索，实时沉淀半导体产业高价值情报。</p>
         </div>
         <div className="title-actions">
           <button className="secondary" onClick={onAddSource}>
@@ -1533,7 +1511,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
         <div className="title-content">
           <span className="eyebrow">来源配置</span>
           <h1>信息源管理</h1>
-          <p>统一维护传统网站爬虫节点与 Dokobot 本地联网检索任务意图。</p>
+          <p>统一维护传统网站爬虫节点与 Tavily 联网检索任务意图。</p>
         </div>
         <button className="primary" onClick={onAdd}>
           <Plus /> 添加信息源
@@ -1573,7 +1551,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
               <span>
                 <span className={`source-kind ${isSearch ? 'web-search' : 'custom'}`}>
                   {isSearch
-                    ? `🌐 联网 · ${SEARCH_ENGINE_LABELS[source.config?.preferred_search_engine || 'google']}`
+                    ? '🌐 联网 · Tavily'
                     : source.builtin ? '🏢 内置站点' : '🕷️ 自定义采集'}
                 </span>
               </span>
@@ -1612,7 +1590,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
           <div className="blank">
             <BookOpen />
             <b>尚未配置信息源</b>
-            <span>添加网站爬虫节点或 Dokobot 联网检索意图后即可开始采集。</span>
+            <span>添加网站爬虫节点或 Tavily 联网检索意图后即可开始采集。</span>
           </div>
         )}
       </section>
@@ -2142,6 +2120,7 @@ function SettingsView() {
     model_name: 'qwen3-max',
     api_key: '',
     request_headers: [],
+    tavily_api_key: '',
     enabled: false
   })
   const [saved, setSaved] = useState(null)
@@ -2202,7 +2181,7 @@ function SettingsView() {
         <div className="title-content">
           <span className="eyebrow">服务端基础设施</span>
           <h1>API 与模型配置</h1>
-          <p>管理 OpenAI 兼容大模型接入点、推理参数与 Dokobot 本地联网服务状态。</p>
+          <p>管理 OpenAI 兼容大模型接入点与 Tavily 联网搜索服务。</p>
         </div>
       </div>
 
@@ -2250,6 +2229,10 @@ function SettingsView() {
                   onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                   placeholder={saved?.has_api_key ? '留空以继续使用现有密钥' : 'sk-...'}
                 />
+              </label>
+              <label className="field full">
+                <span>Tavily API 密钥 {saved?.has_tavily_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.tavily_api_key_hint}</small>}</span>
+                <input type="password" value={form.tavily_api_key || ''} onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })} placeholder={saved?.has_tavily_api_key ? '留空以继续使用现有密钥' : 'tvly-...'} />
               </label>
 
               <div className="header-config full">
@@ -2414,6 +2397,30 @@ export default function App() {
     load()
   }, [load])
 
+  // Keep running task counters and newly persisted articles visible while collection is active.
+  useEffect(() => {
+    if (!tasks.some((task) => ['queued', 'running', 'terminating'].includes(task.status))) return undefined
+    let disposed = false
+    const poll = async () => {
+      try {
+        const taskData = await api.tasks()
+        if (disposed) return
+        setTasks(taskData)
+        if (view === 'history' || view === 'dashboard') {
+          const articleData = await api.articles({ q: articleQuery })
+          if (!disposed) setArticles(articleData)
+        }
+      } catch (err) {
+        if (!disposed) setError(err.message)
+      }
+    }
+    const timer = window.setInterval(poll, 2000)
+    return () => {
+      disposed = true
+      window.clearInterval(timer)
+    }
+  }, [tasks, view, articleQuery])
+
   useEffect(() => {
     if (view === 'history' || view === 'dashboard') {
       refreshHistory()
@@ -2572,7 +2579,7 @@ export default function App() {
           <div className="service-indicator" />
           <div className="service-info">
             <b>本地服务在线</b>
-            <small>Dokobot 引擎已就绪</small>
+            <small>Tavily 搜索服务</small>
           </div>
         </div>
       </aside>

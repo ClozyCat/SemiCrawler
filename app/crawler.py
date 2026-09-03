@@ -16,16 +16,11 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .dokobot import (
-    SEARCH_ENGINE_LABELS,
-    DokobotClient,
-    DokobotError,
-    build_search_query,
-    source_hint_batches,
-)
+from .tavily import TavilyClient, TavilyError
 from .llm import (
     ModelOutputError,
     plan_search_queries,
+    review_search_results,
     structure_article,
     structure_pending,
 )
@@ -120,7 +115,10 @@ def merge_ranked_search_results(
             if rank >= len(batch):
                 continue
             item = batch[rank]
-            key = canonical_url(str(item.link), str(item.link))
+            link = getattr(item, "url", None)
+            if link is None:
+                link = getattr(item, "link", "")
+            key = canonical_url(str(link), str(link))
             if key not in seen:
                 seen.add(key)
                 merged.append(item)
@@ -246,7 +244,6 @@ def test_source(base_url: str, raw_config: dict[str, Any]) -> dict[str, Any]:
             "type": "web_search",
             "query": config.query,
             "source_hint": config.source_hint,
-            "preferred_search_engine": config.preferred_search_engine,
         }
     listing = fetch_html(config.entry_urls[0], config.request.timeout_seconds)
     links, _ = discover_listing(listing, config.entry_urls[0], config)
@@ -275,28 +272,7 @@ def collect_web_search_source(
     setting = db.get(ModelSetting, 1)
     if not setting or not setting.api_key:
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
-
-    client = DokobotClient()
-    close_stale_sessions = getattr(client, "close_stale_sessions", None)
-    if close_stale_sessions:
-        close_stale_sessions()
-    client.preferred_search_engine = config.preferred_search_engine
-    client.search_start_date = task.start_date
-    search_engine = client.select_search_engine()
-    preferred_label = SEARCH_ENGINE_LABELS[config.preferred_search_engine]
-    selected_label = SEARCH_ENGINE_LABELS[search_engine]
-    engine_message = (
-        f"首选搜索引擎 {preferred_label} 连通性检测通过"
-        if search_engine == config.preferred_search_engine
-        else f"首选搜索引擎 {preferred_label} 无法连接，已回退至 {selected_label}"
-    )
-    db.add(
-        TaskLog(
-            task_id=task.id,
-            message=f"{engine_message}，本次联网搜索使用 {selected_label}",
-        )
-    )
-    db.commit()
+    tavily = TavilyClient(setting.tavily_api_key or None)
     try:
         planned_queries = plan_search_queries(
             setting,
@@ -342,28 +318,27 @@ def collect_web_search_source(
     )
     db.commit()
 
-    source_variants = source_hint_batches(config.source_hint)
+    domains = re.findall(r"(?<![@\w])(?:https?://)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)", config.source_hint, re.I)
+    domains = list(dict.fromkeys(domain.lower() for domain in domains))
     search_specs = [
-        (planned_query, source_hint)
+        (planned_query, domain)
         for planned_query in planned_queries
-        for source_hint in source_variants
+        for domain in (domains or [None])
     ]
     result_batches = []
-    search_errors: list[DokobotError] = []
-    for planned_query, source_hint in search_specs:
+    search_errors: list[TavilyError] = []
+    for planned_query, domain in search_specs:
         ensure_task_active(db, task)
-        search_query = build_search_query(
-            planned_query, source_hint, task.start_date, engine=search_engine
-        )
+        search_query = f"site:{domain} {planned_query}" if domain else planned_query
         try:
-            result_batches.append(client.search(search_query, num=config.max_results))
-        except DokobotError as exc:
+            result_batches.append(tavily.search(search_query, num=config.max_results, start_date=task.start_date))
+        except TavilyError as exc:
             search_errors.append(exc)
             db.add(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Dokobot 查询失败 {search_query}：{exc}",
+                    message=f"Tavily 查询失败 {search_query}：{exc}",
                 )
             )
             db.commit()
@@ -371,114 +346,101 @@ def collect_web_search_source(
         raise search_errors[0]
     results = merge_ranked_search_results(result_batches)
     ensure_task_active(db, task)
-    pages = []
+    review_payload = [
+        {"index": index, "title": item.title, "url": str(item.url), "snippet": item.content, "published_date": item.published_date}
+        for index, item in enumerate(results)
+    ]
+    try:
+        keep_indexes = review_search_results(setting, config.query, review_payload, start_date=task.start_date)
+    except (ModelOutputError, ValidationError, json.JSONDecodeError, httpx.HTTPError, ValueError) as exc:
+        keep_indexes = list(range(len(results)))
+        db.add(TaskLog(task_id=task.id, level="notice", message=f"LLM 搜索索引审阅失败，保留全部结果：{type(exc).__name__}: {str(exc)[:300]}"))
+        db.commit()
+    results = [item for index, item in enumerate(results) if index in set(keep_indexes)]
+    configured = json.loads(task.keyword_config_json or "[]")
+    groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
+    saved = structured = deduped = date_filtered = keyword_filtered = 0
+    pages = 0
     failed = 0
     for search_item in results:
         ensure_task_active(db, task)
         page = None
         try:
-            page = client.read(str(search_item.link))
-            pages.append((search_item, page))
+            try:
+                page = tavily.extract(str(search_item.url))
+            except TavilyError:
+                html = fetch_html(str(search_item.url))
+                parsed = BeautifulSoup(html, "html.parser")
+                text = _text(parsed.body or parsed)
+                page = type("Page", (), {"url": str(search_item.url), "title": search_item.title, "text": text})()
+            pages += 1
             ensure_task_active(db, task)
-        except DokobotError as exc:
+            url = canonical_url(str(page.url), str(page.url))
+            body = page.text.strip()
+            title = page.title or search_item.title
+            published_at = parse_date(
+                f"{title}\n{search_item.content}\n{body[:4000]}",
+                ["%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日"],
+            )
+            if published_at and published_at < task.start_date:
+                date_filtered += 1
+                db.commit()
+                continue
+            if task.keyword_filter_enabled:
+                haystack = f"{title}\n{body}".casefold()
+                if isinstance(configured, dict):
+                    matched = all(any(keyword in haystack for keyword in terms) for terms in groups.values())
+                else:
+                    matched = any(keyword in haystack for keyword in groups.get("technical", []))
+                if not matched or is_low_value_event_promotion(title, body):
+                    keyword_filtered += 1
+                    db.commit()
+                    continue
+            digest = hashlib.sha256(" ".join(body.split()).encode()).hexdigest()
+            existing = db.scalar(select(RawArticle).where((RawArticle.canonical_url == url) | (RawArticle.content_hash == digest)))
+            if existing:
+                deduped += 1
+                task.deduplicated_count += 1
+                db.commit()
+                continue
+            article = RawArticle(
+                source_id=snapshot["id"], task_id=task.id, canonical_url=url,
+                title=title[:500], published_at=published_at,
+                published_text=published_at.isoformat() if published_at else None,
+                body=body, content_hash=digest, status="pending",
+            )
+            db.add(article)
+            db.flush()
+            source_name = (urlparse(url).hostname or snapshot["name"]).removeprefix("www.")
+            created = structure_article(db, article, setting, source_name=source_name)
+            ensure_task_active(db, task)
+            structured += created
+            if article.status == "review_required":
+                failed += 1
+                db.add(TaskLog(task_id=task.id, level="error", message=f"结构化待审核 {url}: {article.error_message}"))
+            saved += 1
+            task.fetched_count += 1
+            task.structured_count += created
+        except TaskTerminationRequested:
+            raise
+        except Exception as exc:
             failed += 1
             db.add(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Dokobot 读页失败 {search_item.link}: {exc}",
+                    message=f"Tavily 抓取失败 {search_item.url}: {exc}",
                 )
             )
             db.commit()
-        finally:
-            if page:
-                try:
-                    close_session = getattr(client, "close_session", None)
-                    if close_session:
-                        close_session(page.session_id)
-                except DokobotError:
-                    pass
-
-    configured = json.loads(task.keyword_config_json or "[]")
-    groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
-    saved = structured = deduped = date_filtered = keyword_filtered = 0
-    for search_item, page in pages:
-        ensure_task_active(db, task)
-        url = canonical_url(str(page.url), str(page.url))
-        body = page.text.strip()
-        title = page.title or search_item.title
-        published_at = parse_date(
-            f"{title}\n{search_item.snippet}\n{body[:4000]}",
-            [
-                "%Y-%m-%d",
-                "%Y/%m/%d",
-                "%Y年%m月%d日",
-            ],
-        )
-        if published_at and published_at < task.start_date:
-            date_filtered += 1
-            continue
-        if task.keyword_filter_enabled:
-            haystack = f"{title}\n{body}".casefold()
-            if isinstance(configured, dict):
-                matched = all(
-                    any(keyword in haystack for keyword in terms)
-                    for terms in groups.values()
-                )
-            else:
-                matched = any(
-                    keyword in haystack for keyword in groups.get("technical", [])
-                )
-            if not matched or is_low_value_event_promotion(title, body):
-                keyword_filtered += 1
-                continue
-        digest = hashlib.sha256(" ".join(body.split()).encode()).hexdigest()
-        existing = db.scalar(
-            select(RawArticle).where(
-                (RawArticle.canonical_url == url) | (RawArticle.content_hash == digest)
-            )
-        )
-        if existing:
-            deduped += 1
-            task.deduplicated_count += 1
-            continue
-        article = RawArticle(
-            source_id=snapshot["id"],
-            task_id=task.id,
-            canonical_url=url,
-            title=title[:500],
-            published_at=published_at,
-            published_text=published_at.isoformat() if published_at else None,
-            body=body,
-            content_hash=digest,
-            status="pending",
-        )
-        db.add(article)
-        db.flush()
-        source_name = (urlparse(url).hostname or snapshot["name"]).removeprefix("www.")
-        created = structure_article(db, article, setting, source_name=source_name)
-        ensure_task_active(db, task)
-        structured += created
-        if article.status == "review_required":
-            failed += 1
-            db.add(
-                TaskLog(
-                    task_id=task.id,
-                    level="error",
-                    message=f"结构化待审核 {url}: {article.error_message}",
-                )
-            )
-        saved += 1
-        task.fetched_count += 1
-        task.structured_count += created
         db.commit()
     db.add(
         TaskLog(
             task_id=task.id,
             message=(
-                f"Dokobot 本地联网检索完成 {snapshot['name']}："
+                f"Tavily 联网检索完成 {snapshot['name']}："
                 f"执行 {len(search_specs)} 条搜索查询（{len(planned_queries)} 个关键词 × "
-                f"{len(source_variants)} 个来源批次），"
+                f"{len(domains) or 1} 个来源域名），"
                 f"合并找到 {len(results)} 篇，读取 {len(pages)} 篇，"
                 f"保存 {saved} 篇、结构化 {structured} 条，"
                 f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"

@@ -723,6 +723,8 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
         enabled=setting.enabled,
         has_api_key=bool(setting.api_key),
         api_key_hint=hint,
+        has_tavily_api_key=bool(setting.tavily_api_key),
+        tavily_api_key_hint=("*" * max(len(setting.tavily_api_key) - 4, 0) + setting.tavily_api_key[-4:]) if setting.tavily_api_key else "",
         request_headers=json.loads(setting.request_headers_json or "[]"),
         keyword_config=json.loads(setting.keyword_config_json or "[]"),
         keyword_filter_enabled=bool(setting.keyword_filter_enabled),
@@ -755,6 +757,8 @@ def update_model_setting(payload: ModelSettingUpdate, db: Session = Depends(get_
     setting.keyword_filter_enabled = payload.keyword_filter_enabled
     if payload.api_key is not None and payload.api_key.strip():
         setting.api_key = payload.api_key.strip()
+    if payload.tavily_api_key is not None and payload.tavily_api_key.strip():
+        setting.tavily_api_key = payload.tavily_api_key.strip()
     db.add(setting)
     db.commit()
     db.refresh(setting)

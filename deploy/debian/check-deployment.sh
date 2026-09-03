@@ -9,16 +9,16 @@ if [[ -r "$config_file" ]]; then
   set +a
 fi
 
-dokobot_executable="${SEMICRAWLER_DOKOBOT_EXECUTABLE:-dokobot}"
-dokobot_home="${SEMICRAWLER_DOKOBOT_HOME:-$HOME}"
 
 echo "[1/3] FastAPI health"
 curl --fail --silent --show-error http://127.0.0.1:8070/api/health
 echo
 
-echo "[2/3] Dokobot bridge"
-HOME="$dokobot_home" "$dokobot_executable" doko list
-
-echo "[3/3] Browser read"
-HOME="$dokobot_home" "$dokobot_executable" read --local https://dokobot.ai --timeout 90 >/dev/null
-echo "OK: API and Dokobot local browser bridge are available."
+echo "[2/3] Tavily configuration"
+if [[ -z "${TAVILY_API_KEY:-}" ]]; then
+  echo "WARN: TAVILY_API_KEY is not set; configure it in API settings."
+else
+  echo "Tavily key is configured."
+fi
+echo "[3/3] Complete"
+echo "OK: API and Tavily configuration checks completed."

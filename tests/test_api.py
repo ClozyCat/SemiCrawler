@@ -109,8 +109,7 @@ def test_web_search_source_uses_simple_natural_language_config(client):
                 "type": "web_search",
                 "query": "检索先进封装项目的签约、开工与扩产动态",
                 "source_hint": "优先政府园区官网和企业新闻中心",
-                "max_results": 60,
-                "preferred_search_engine": "baidu",
+                "max_results": 20,
             },
         },
     )
@@ -119,8 +118,7 @@ def test_web_search_source_uses_simple_natural_language_config(client):
     assert (
         response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
     )
-    assert response.json()["config"]["max_results"] == 60
-    assert response.json()["config"]["preferred_search_engine"] == "baidu"
+    assert response.json()["config"]["max_results"] == 20
 
 
 def test_task_snapshot_and_logs(client, monkeypatch):

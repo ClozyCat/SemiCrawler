@@ -236,6 +236,7 @@ class ModelSettingUpdate(BaseModel):
     base_url: HttpUrl
     model_name: str = Field(min_length=1, max_length=200)
     api_key: str | None = None
+    tavily_api_key: str | None = None
     request_headers: list[RequestHeaderSetting] | None = None
     enabled: bool = False
     keyword_config: Any = Field(default_factory=list)
@@ -260,6 +261,8 @@ class ModelSettingRead(BaseModel):
     enabled: bool
     has_api_key: bool
     api_key_hint: str
+    has_tavily_api_key: bool = False
+    tavily_api_key_hint: str = ""
     request_headers: list[RequestHeaderSetting] = Field(default_factory=list)
     keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False

@@ -8,8 +8,20 @@ from app.llm import (
     _call,
     _normalize_region_and_organization,
     plan_search_queries,
+    review_search_results,
     structure_article,
 )
+
+
+def test_search_review_returns_valid_unique_indexes(monkeypatch):
+    monkeypatch.setattr(
+        "app.llm._call",
+        lambda setting, messages: '{"keep": [2, 0, 2, 99]}',
+    )
+    setting = ModelSetting(base_url="https://api.example.com", model_name="test", api_key="x")
+    results = [{"index": index, "title": str(index)} for index in range(3)]
+
+    assert review_search_results(setting, "芯片项目", results) == [2, 0]
 from app.models import ModelSetting, RawArticle, Source
 
 

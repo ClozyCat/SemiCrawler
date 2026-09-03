@@ -58,10 +58,7 @@ class WebSearchSourceConfig(BaseModel):
     type: Literal["web_search"]
     query: str = Field(min_length=2, max_length=2000)
     source_hint: str = Field(default="", max_length=2000)
-    max_results: int = Field(default=10, ge=1, le=100)
-    preferred_search_engine: Literal["google", "baidu", "sogou", "so360", "bing"] = (
-        "google"
-    )
+    max_results: int = Field(default=10, ge=1, le=20)
 
     @field_validator("query", "source_hint")
     @classmethod

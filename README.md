@@ -1,6 +1,6 @@
 # 芯闻采集台
 
-实施计划的四个阶段均已完成：React/Vite 工作台、FastAPI/SQLite 持久化、两站真实采集、Dokobot 本地联网检索、OpenAI 兼容 LLM 结构化、证据与置信度审核、JSON 来源试抓取/版本化，以及默认和完整审计 CSV/XLSX 导出。
+实施计划的四个阶段均已完成：React/Vite 工作台、FastAPI/SQLite 持久化、两站真实采集、Tavily 联网检索与索引审阅、OpenAI 兼容 LLM 结构化、证据与置信度审核、JSON 来源试抓取/版本化，以及默认和完整审计 CSV/XLSX 导出。
 
 ## 本地运行
 
@@ -15,16 +15,11 @@ npm run dev
 
 在“API配置”页面填写兼容 API 地址、模型名和 API Key 后启用自动结构化。密钥仅由后端保存，读取接口只返回掩码。未启用模型时，普通网站文章会保留为待结构化原文，不会丢失。
 
-联网信息源使用 Dokobot 免费本地模式，通过真实浏览器读取搜索结果页和原始网页，不使用 Dokobot Remote，也不需要 Dokobot API Key。先安装 [Dokobot 浏览器扩展](https://chromewebstore.google.com/detail/dokobot/dlbiigchkpmpijahmlofleeemiomaneo)，然后完成一次本地 CLI 配置：
+联网信息源使用 Tavily Search/Extract API。请在“API配置”中保存 Tavily API Key，或设置 `TAVILY_API_KEY` 环境变量。
 
-```powershell
-npm i -g @dokobot/cli@latest
-dokobot install-bridge
-```
+添加信息源时选择“联网搜索”，填写自然语言检索主题及可选域名。系统先让 LLM 拆分查询词，再以 `site:` 和任务起始日期调用 Tavily，交给 LLM 审阅索引后使用 Tavily Extract（失败时回退普通 HTTP）读取正文，最后沿用关键词过滤和结构化流程。
 
-重启浏览器或重新加载扩展后，运行 `dokobot read --local https://dokobot.ai` 可验证本地桥接。添加信息源时选择“联网搜索”，填写自然语言检索主题及可选来源提示，并可从 Google、Bing、百度、搜狗和 360 搜索中指定首选搜索引擎。任务只在首选引擎无法连接时按 Google、Bing、百度、搜狗、360 搜索的默认顺序回退，然后用 `dokobot read --local` 搜索和读取原文，再用“API配置”中的 OpenAI 兼容模型生成结构化记录。来源提示中的网址会按每批最多 6 个分组，并在同一次搜索中拼成 `site:a.example OR site:b.example` 限制；Google 使用 `after:` 限定起始日期，百度使用搜索页时间参数，所有引擎的结果都会在保存前再次按任务起始日期过滤。每个规划关键词在每个来源批次内最多读取“查看数量上限”条结果，不设置跨关键词和跨来源批次的总数上限。任务执行全局串行，Dokobot 接管标签页上限为 5 个，并会复用和清理任务使用的标签页。
-
-Dokobot 本地桥接需要后端进程与浏览器运行在同一台主机。默认 Docker 后端容器无法直接访问宿主机的本地桥接，因此联网搜索请使用上方的本地运行方式；普通网站采集和已保存数据仍可使用 Docker。
+Tavily API 可直接在 Docker 或本地后端使用；普通网站采集和已保存数据仍可使用 Docker。
 
 采集器在每次请求前遵守目标站点 `robots.txt`，使用可识别的 `SemiCrawler/1.0` User-Agent，并按来源配置限速。工具仅用于公开页面和本地事实审核；导出始终保留来源归属及原文链接，使用者仍需遵守站点条款和版权要求。
 
@@ -57,8 +52,8 @@ docker compose up -d
 
 直接构建后端镜像时可使用 `--build-arg PYPI_INDEX_URL=<镜像地址>` 覆盖默认值。
 
-## Debian 部署（Dokobot + Xvfb）
+## Debian 部署
 
-Debian 服务器可以通过 Xvfb 持续运行带 Dokobot 扩展的 Chrome，并让 FastAPI 以同一系统用户访问本地 Native Messaging Bridge。仓库提供了 systemd、Nginx、环境变量模板以及联合检查脚本；Nginx 默认监听 `8071`，不会占用 80 端口。
+Debian 服务器可直接运行 Tavily API 后端与普通网站采集服务。仓库提供了 systemd、Nginx、环境变量模板以及联合检查脚本；Nginx 默认监听 `8071`，不会占用 80 端口。
 
-完整的逐步部署、首次 VNC 安装扩展、验证、更新、备份和故障排查说明见 [Debian + Xvfb + Dokobot 手动部署](docs/debian-dokobot-deployment.md)。
+完整的部署、验证、更新和备份说明见 `deploy/debian/` 下的部署文件。
