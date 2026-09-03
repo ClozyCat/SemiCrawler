@@ -838,20 +838,25 @@ function Dashboard({
 
   const latestTask = tasks[0]
 
+  const enabledSources = useMemo(
+    () => sources.filter((source) => source.enabled),
+    [sources],
+  )
+
   const filteredSources = useMemo(() => {
-    if (!sourceSearch.trim()) return sources
+    if (!sourceSearch.trim()) return enabledSources
     const q = sourceSearch.toLowerCase().trim()
-    return sources.filter((s) =>
+    return enabledSources.filter((s) =>
       s.name.toLowerCase().includes(q) ||
       (s.config?.query && s.config.query.toLowerCase().includes(q)) ||
       (s.base_url && s.base_url.toLowerCase().includes(q))
     )
-  }, [sources, sourceSearch])
+  }, [enabledSources, sourceSearch])
 
-  const selectAll = () => setSelected(sources.map((s) => s.id))
+  const selectAll = () => setSelected(enabledSources.map((s) => s.id))
   const selectNone = () => setSelected([])
-  const selectWebSearch = () => setSelected(sources.filter((s) => s.source_type === 'web_search').map((s) => s.id))
-  const selectCrawlers = () => setSelected(sources.filter((s) => s.source_type !== 'web_search').map((s) => s.id))
+  const selectWebSearch = () => setSelected(enabledSources.filter((s) => s.source_type === 'web_search').map((s) => s.id))
+  const selectCrawlers = () => setSelected(enabledSources.filter((s) => s.source_type !== 'web_search').map((s) => s.id))
 
   const handleCreateTask = () => {
     if (selected.length === 0) {
@@ -889,7 +894,7 @@ function Dashboard({
           <div className="panel-head">
             <div>
               <h2>信息源选择</h2>
-              <p>已选择 {selected.length} / {sources.length} 个信息源</p>
+              <p>已选择 {selected.length} / {enabledSources.length} 个信息源</p>
             </div>
           </div>
 
@@ -927,7 +932,7 @@ function Dashboard({
               return (
                 <label
                   key={source.id}
-                  className={`source-row ${!source.enabled ? 'disabled' : ''}`}
+                  className="source-row"
                 >
                   <input
                     type="checkbox"
@@ -2246,8 +2251,9 @@ function SettingsView() {
         </div>
       </div>
 
-      <div className="settings-grid">
-        <section className="panel model-form">
+      <form className="settings-form" onSubmit={submit}>
+        <div className="settings-grid">
+          <section className="panel model-form">
           <div className="panel-head">
             <div>
               <h2>AI 模型服务 (DashScope / OpenAI Compatible)</h2>
@@ -2256,7 +2262,6 @@ function SettingsView() {
             <SlidersHorizontal />
           </div>
 
-          <form onSubmit={submit}>
             <div className="form-grid">
               <label className="field">
                 <span>API 接口地址 (Base URL)</span>
@@ -2292,19 +2297,6 @@ function SettingsView() {
                   placeholder={saved?.has_api_key ? '留空以继续使用现有密钥' : 'sk-...'}
                 />
               </label>
-              <label className="field">
-                <span>百度搜索 API 密钥 {saved?.has_baidu_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.baidu_api_key_hint}</small>}</span>
-                <input type="password" autoComplete="new-password" value={form.baidu_api_key || ''} onChange={(e) => setForm({ ...form, baidu_api_key: e.target.value })} placeholder={saved?.has_baidu_api_key ? '留空以继续使用现有密钥' : '百度千帆 API Key'} />
-              </label>
-              <label className="field">
-                <span>Tavily API 密钥 {saved?.has_tavily_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.tavily_api_key_hint}</small>}</span>
-                <input type="password" autoComplete="new-password" value={form.tavily_api_key || ''} onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })} placeholder={saved?.has_tavily_api_key ? '留空以继续使用现有密钥' : 'tvly-...'} />
-              </label>
-              <label className="field">
-                <span>Anysearch API 密钥 {saved?.has_anysearch_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.anysearch_api_key_hint}</small>}</span>
-                <input type="password" autoComplete="new-password" value={form.anysearch_api_key || ''} onChange={(e) => setForm({ ...form, anysearch_api_key: e.target.value })} placeholder={saved?.has_anysearch_api_key ? '留空以继续使用现有密钥' : 'as_sk_...'} />
-              </label>
-
               <div className="header-config full">
                 <div className="header-config-title">
                   <h3>自定义 HTTP 请求头</h3>
@@ -2371,15 +2363,39 @@ function SettingsView() {
               )}
             </div>
 
-            <footer style={{ marginTop: 20 }}>
-              <button className="primary" disabled={saving}>
-                {saving ? <LoaderCircle className="spin" /> : <Save />}
-                {saving ? '正在保存...' : '保存模型配置'}
-              </button>
-            </footer>
-          </form>
-        </section>
-      </div>
+          </section>
+
+          <section className="panel search-form">
+            <div className="panel-head">
+              <div>
+                <h2>联网搜索服务</h2>
+                <p>为百度搜索、Tavily 和 Anysearch 分别配置独立 API 密钥</p>
+              </div>
+              <Globe2 />
+            </div>
+            <div className="search-key-form">
+              <label className="field">
+                <span>百度搜索 API 密钥 {saved?.has_baidu_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.baidu_api_key_hint}</small>}</span>
+                <input type="password" autoComplete="new-password" value={form.baidu_api_key || ''} onChange={(e) => setForm({ ...form, baidu_api_key: e.target.value })} placeholder={saved?.has_baidu_api_key ? '留空以继续使用现有密钥' : '百度千帆 API Key'} />
+              </label>
+              <label className="field">
+                <span>Tavily API 密钥 {saved?.has_tavily_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.tavily_api_key_hint}</small>}</span>
+                <input type="password" autoComplete="new-password" value={form.tavily_api_key || ''} onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })} placeholder={saved?.has_tavily_api_key ? '留空以继续使用现有密钥' : 'tvly-...'} />
+              </label>
+              <label className="field">
+                <span>Anysearch API 密钥 {saved?.has_anysearch_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.anysearch_api_key_hint}</small>}</span>
+                <input type="password" autoComplete="new-password" value={form.anysearch_api_key || ''} onChange={(e) => setForm({ ...form, anysearch_api_key: e.target.value })} placeholder={saved?.has_anysearch_api_key ? '留空以继续使用现有密钥' : 'as_sk_...'} />
+              </label>
+            </div>
+          </section>
+        </div>
+        <footer className="settings-form-footer">
+          <button className="primary" disabled={saving}>
+            {saving ? <LoaderCircle className="spin" /> : <Save />}
+            {saving ? '正在保存...' : '保存 API 配置'}
+          </button>
+        </footer>
+      </form>
     </>
   )
 }
@@ -2608,6 +2624,10 @@ export default function App() {
   }
 
   const activeLabel = useMemo(() => ALL_NAV.find((item) => item.id === view)?.label, [view])
+  const activeGroupLabel = useMemo(
+    () => NAV_GROUPS.find((group) => group.items.some((item) => item.id === view))?.title || '系统配置',
+    [view],
+  )
 
   return (
     <div className="app-shell">
@@ -2665,7 +2685,7 @@ export default function App() {
               <Menu />
             </button>
             <div className="topbar-breadcrumb">
-              <span>系统工作区</span>
+              <span>{activeGroupLabel}</span>
               <ChevronRight style={{ width: 14, height: 14 }} />
               <strong>{activeLabel}</strong>
             </div>
