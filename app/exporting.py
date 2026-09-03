@@ -11,7 +11,7 @@ from .constants import EXPORT_COLUMNS
 
 
 AUDIT_COLUMNS = [("status", "处理状态"), ("evidence_json", "字段证据"), ("confidence_json", "字段置信度"),
-                 ("article_id", "原文ID"), ("task_id", "任务ID"), ("created_at", "创建时间"), ("updated_at", "更新时间")]
+                 ("article_id", "原文ID"), ("task_id", "任务ID"), ("created_at", "开始时间"), ("updated_at", "更新时间")]
 
 
 def _columns(audit=False):

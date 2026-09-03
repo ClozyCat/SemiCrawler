@@ -16,12 +16,29 @@ from app.llm import (
 def test_search_review_returns_valid_unique_indexes(monkeypatch):
     monkeypatch.setattr(
         "app.llm._call",
-        lambda setting, messages: '{"keep": [2, 0, 2, 99]}',
+        lambda setting, messages, **kwargs: '{"keep": [2, 0, 2, 99]}',
     )
     setting = ModelSetting(base_url="https://api.example.com", model_name="test", api_key="x")
     results = [{"index": index, "title": str(index)} for index in range(3)]
 
     assert review_search_results(setting, "芯片项目", results) == [2, 0]
+
+
+def test_search_review_retries_remote_disconnect(monkeypatch):
+    attempts = 0
+
+    def flaky_call(setting, messages, **kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts < 3:
+            raise httpx.RemoteProtocolError("disconnect")
+        return '{"keep": [0]}'
+
+    monkeypatch.setattr("app.llm._call", flaky_call)
+    monkeypatch.setattr("app.llm.time.sleep", lambda _: None)
+    setting = ModelSetting(base_url="https://api.example.com", model_name="test", api_key="x")
+    assert review_search_results(setting, "芯片项目", [{"index": 0, "title": "项目"}]) == [0]
+    assert attempts == 3
 from app.models import ModelSetting, RawArticle, Source
 
 

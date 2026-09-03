@@ -1398,13 +1398,24 @@ a.external:hover {
   overflow: hidden;
 }
 
+.task-times {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
+  margin-top: -6px;
+}
+
 .task-time {
   display: flex;
   align-items: center;
   gap: 6px;
-  margin-top: -6px;
   color: var(--ink-muted);
   font-size: 12px;
+}
+
+.task-time b {
+  color: var(--ink);
+  font-weight: 500;
 }
 
 .task-time svg {

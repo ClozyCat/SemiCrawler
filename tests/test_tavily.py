@@ -3,7 +3,7 @@ from datetime import date
 from app.tavily import TavilyClient
 
 
-def test_search_sends_date_and_site_query(monkeypatch):
+def test_search_sends_general_topic_date_and_domains(monkeypatch):
     captured = {}
 
     class Response:
@@ -28,12 +28,19 @@ def test_search_sends_date_and_site_query(monkeypatch):
 
     monkeypatch.setattr("app.tavily.httpx.post", fake_post)
     items = TavilyClient("tvly-test").search(
-        "site:example.com 先进封装 项目", num=20, start_date=date(2026, 8, 1)
+        "先进封装 项目",
+        num=20,
+        start_date=date(2026, 8, 1),
+        end_date=date(2026, 9, 3),
+        domains=["example.com"],
     )
 
     assert captured["url"] == "https://api.tavily.com/search"
-    assert captured["json"]["query"].startswith("site:example.com")
+    assert captured["json"]["query"] == "先进封装 项目"
     assert captured["json"]["start_date"] == "2026-08-01"
+    assert captured["json"]["end_date"] == "2026-09-03"
+    assert captured["json"]["topic"] == "general"
+    assert captured["json"]["include_domains"] == ["example.com"]
     assert captured["json"]["max_results"] == 20
     assert str(items[0].url) == "https://example.com/project"
 

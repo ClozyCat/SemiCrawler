@@ -1,5 +1,5 @@
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 
 from sqlalchemy import func, select
 
@@ -10,12 +10,18 @@ from app.crawler import (
     keyword_values,
     merge_ranked_search_results,
     parse_article,
+    parse_search_result_date,
     run_task,
 )
 from app.database import SessionLocal
-from app.dokobot import DokobotError, DokobotPage, DokobotSearchItem
 from app.models import CollectionTask, ModelSetting, RawArticle, Source, TaskLog
 from app.source_config import SourceConfig
+from app.tavily import TavilyError, TavilyPage, TavilySearchItem
+
+
+def test_parse_tavily_rfc_date():
+    assert parse_search_result_date("Fri, 28 Aug 2026 02:00:00 GMT") == date(2026, 8, 28)
+    assert parse_search_result_date("2025-07-01") == date(2025, 7, 1)
 
 
 def config(**selector_overrides):
@@ -121,23 +127,31 @@ def test_collection_counts_only_persisted_articles_as_fetched(monkeypatch):
         assert stored.raw_payload_json == "{}"
 
 
-def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
-    class FakeDokobotClient:
-        def select_search_engine(self):
-            return "google"
+def test_web_search_uses_tavily_pages_then_structures_them(monkeypatch):
+    class FakeTavilyClient:
+        def __init__(self, api_key):
+            assert api_key is None
 
-        def search(self, query, *, num):
-            assert "after:2026-08-20" in query
-            assert num == 10
+        def search(self, query, **kwargs):
+            assert query == "先进封装开工"
+            assert kwargs == {
+                "num": 10,
+                "topic": "general",
+                "start_date": date(2026, 8, 20),
+                "end_date": datetime.now(UTC).date(),
+                "domains": None,
+            }
             return [
-                DokobotSearchItem(
-                    title="搜索结果标题", link="https://news.example.com/project"
+                TavilySearchItem(
+                    title="搜索结果标题",
+                    url="https://news.example.com/project",
+                    published_date="2026-08-21",
                 )
             ]
 
-        def read(self, url):
+        def extract(self, url):
             assert url == "https://news.example.com/project"
-            return DokobotPage(
+            return TavilyPage(
                 title="先进封装项目开工",
                 url=url,
                 text="2026年8月21日，某公司先进封装项目正式开工，计划建设多条生产线。"
@@ -154,10 +168,14 @@ def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
         article.model_name = setting.model_name
         return 1
 
-    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.TavilyClient", FakeTavilyClient)
     monkeypatch.setattr(
         "app.crawler.plan_search_queries",
         lambda setting, topic, **kwargs: [topic],
+    )
+    monkeypatch.setattr(
+        "app.crawler.review_search_results",
+        lambda setting, topic, results, **kwargs: list(range(len(results))),
     )
     monkeypatch.setattr("app.crawler.structure_article", fake_structure)
     raw_config = {
@@ -169,8 +187,8 @@ def test_web_search_uses_dokobot_pages_then_structures_them(monkeypatch):
 
     with SessionLocal() as db:
         source = Source(
-            name="Dokobot测试",
-            base_url="https://dokobot.ai",
+            name="Tavily测试",
+            base_url="https://api.tavily.com",
             config_json=json.dumps(raw_config),
         )
         db.add(source)
@@ -215,32 +233,34 @@ def test_web_search_executes_five_planned_queries_plus_original_and_merges_resul
 ):
     searched = []
 
-    class FakeDokobotClient:
-        def select_search_engine(self):
-            return "google"
+    class FakeTavilyClient:
+        def __init__(self, api_key):
+            pass
 
-        def search(self, query, *, num):
-            searched.append(query)
+        def search(self, query, **kwargs):
+            searched.append((query, kwargs))
             suffix = "shared" if len(searched) == 1 else "second"
             return [
-                DokobotSearchItem(
+                TavilySearchItem(
                     title=f"结果 {suffix}",
-                    link=f"https://news.example.com/{suffix}",
+                    url=f"https://news.example.com/{suffix}",
+                    published_date="2026-08-21",
                 ),
-                DokobotSearchItem(
+                TavilySearchItem(
                     title="公共结果",
-                    link="https://news.example.com/shared",
+                    url="https://news.example.com/shared",
+                    published_date="2026-08-21",
                 ),
             ]
 
-        def read(self, url):
-            return DokobotPage(
+        def extract(self, url):
+            return TavilyPage(
                 title="先进封装项目正式开工",
                 url=url,
                 text=(f"2026年8月21日，{url} 对应的先进封装项目正式开工并建设生产线。" * 5),
             )
 
-    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.TavilyClient", FakeTavilyClient)
     monkeypatch.setattr(
         "app.crawler.plan_search_queries",
         lambda setting, topic, **kwargs: [
@@ -254,6 +274,10 @@ def test_web_search_executes_five_planned_queries_plus_original_and_merges_resul
     monkeypatch.setattr(
         "app.crawler.structure_article",
         lambda db, article, setting, **kwargs: 1,
+    )
+    monkeypatch.setattr(
+        "app.crawler.review_search_results",
+        lambda setting, topic, results, **kwargs: list(range(len(results))),
     )
     raw_config = {
         "type": "web_search",
@@ -301,8 +325,9 @@ def test_web_search_executes_five_planned_queries_plus_original_and_merges_resul
 
         assert result == (2, 0, 0, 2, 0, 0)
         assert len(searched) == 6
-        assert searched[-1] == "先进封装和 Chiplet 项目动态 after:2026-08-20"
-        assert all("after:2026-08-20" in query for query in searched)
+        assert searched[-1][0] == "先进封装和 Chiplet 项目动态"
+        assert all(call[1]["topic"] == "general" for call in searched)
+        assert all(call[1]["start_date"] == date(2026, 8, 20) for call in searched)
         logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
         assert any(
             "本次将执行 6 条搜索查询（5 条 LLM 规划查询 + 1 条原始查询）"
@@ -316,27 +341,28 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
 ):
     searched = []
 
-    class FakeDokobotClient:
-        def select_search_engine(self):
-            return "bing"
+    class FakeTavilyClient:
+        def __init__(self, api_key):
+            pass
 
-        def search(self, query, *, num):
-            searched.append((query, num))
+        def search(self, query, **kwargs):
+            searched.append((query, kwargs))
             return [
-                DokobotSearchItem(
+                TavilySearchItem(
                     title=query,
-                    link=f"https://news.example.com/{len(searched)}",
+                    url=f"https://one.example/{len(searched)}",
+                    published_date="2026-08-21",
                 )
             ]
 
-        def read(self, url):
-            return DokobotPage(
+        def extract(self, url):
+            return TavilyPage(
                 title="项目动态",
                 url=url,
                 text="2026年8月21日，先进封装项目正式开工并建设生产线。" * 5,
             )
 
-    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.TavilyClient", FakeTavilyClient)
     monkeypatch.setattr(
         "app.crawler.plan_search_queries",
         lambda setting, topic, **kwargs: ["关键词一", "关键词二"],
@@ -345,11 +371,15 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
         "app.crawler.structure_article",
         lambda db, article, setting, **kwargs: 1,
     )
+    monkeypatch.setattr(
+        "app.crawler.review_search_results",
+        lambda setting, topic, results, **kwargs: list(range(len(results))),
+    )
     raw_config = {
         "type": "web_search",
         "query": "原始关键词",
         "source_hint": "https://one.example/news\nhttps://two.example/projects",
-        "max_results": 100,
+        "max_results": 20,
     }
 
     with SessionLocal() as db:
@@ -390,8 +420,12 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
         )
 
     assert len(searched) == 3
-    assert all(num == 100 for _, num in searched)
-    assert all("site:one.example OR site:two.example" in query for query, _ in searched)
+    assert all(kwargs["num"] == 20 for _, kwargs in searched)
+    assert all(
+        kwargs["domains"] == ["one.example", "two.example"]
+        for _, kwargs in searched
+    )
+    assert all("site:" not in query for query, _ in searched)
     assert result[3] == 3
     assert result[0] == 1
     assert result[1] == 2
@@ -399,7 +433,7 @@ def test_web_search_groups_source_urls_per_query_without_total_limit(
 
 def test_merge_ranked_search_results_round_robins_and_deduplicates():
     def item(path):
-        return DokobotSearchItem(title=path, link=f"https://example.com/{path}")
+        return TavilySearchItem(title=path, url=f"https://example.com/{path}")
 
     shared = item("shared")
     merged = merge_ranked_search_results(
@@ -413,18 +447,18 @@ def test_merge_ranked_search_results_round_robins_and_deduplicates():
 def test_web_search_falls_back_to_original_query_when_planning_fails(monkeypatch):
     searched = []
 
-    class FakeDokobotClient:
-        def select_search_engine(self):
-            return "google"
+    class FakeTavilyClient:
+        def __init__(self, api_key):
+            pass
 
-        def search(self, query, *, num):
-            searched.append(query)
+        def search(self, query, **kwargs):
+            searched.append((query, kwargs))
             return []
 
     def fail_planning(setting, topic, **kwargs):
         raise ValueError("invalid plan")
 
-    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.TavilyClient", FakeTavilyClient)
     monkeypatch.setattr("app.crawler.plan_search_queries", fail_planning)
     raw_config = {
         "type": "web_search",
@@ -471,29 +505,31 @@ def test_web_search_falls_back_to_original_query_when_planning_fails(monkeypatch
         )
 
         assert result == (0, 0, 0, 0, 0, 0)
-        assert searched == ["先进封装开工 after:2026-08-20"]
+        assert [query for query, _ in searched] == ["先进封装开工"] * 2
+        assert searched[0][1]["start_date"] == date(2026, 8, 20)
+        assert "start_date" not in searched[1][1]
+        db.flush()
         logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
         assert any("已回退到原始查询" in log.message for log in logs)
+        assert any("无日期放宽重试 1 次" in log.message for log in logs)
 
 
-def test_web_search_skips_planning_and_search_when_engines_are_unreachable(
-    monkeypatch,
-):
+def test_web_search_propagates_tavily_search_errors(monkeypatch):
     calls = {"plan": 0, "search": 0}
 
-    class FakeDokobotClient:
-        def select_search_engine(self):
-            raise DokobotError("Google 和 Bing 均无法连接，已跳过联网搜索任务")
+    class FakeTavilyClient:
+        def __init__(self, api_key):
+            pass
 
-        def search(self, query, *, num):
+        def search(self, query, **kwargs):
             calls["search"] += 1
-            return []
+            raise TavilyError("Tavily 无法连接")
 
-    def fake_plan(*args, **kwargs):
+    def fake_plan(setting, topic, **kwargs):
         calls["plan"] += 1
-        return ["不应执行"]
+        return [topic]
 
-    monkeypatch.setattr("app.crawler.DokobotClient", FakeDokobotClient)
+    monkeypatch.setattr("app.crawler.TavilyClient", FakeTavilyClient)
     monkeypatch.setattr("app.crawler.plan_search_queries", fake_plan)
     raw_config = {
         "type": "web_search",
@@ -539,12 +575,12 @@ def test_web_search_skips_planning_and_search_when_engines_are_unreachable(
                     "config": raw_config,
                 },
             )
-        except DokobotError as exc:
-            assert "已跳过联网搜索任务" in str(exc)
+        except TavilyError as exc:
+            assert "无法连接" in str(exc)
         else:
             raise AssertionError("expected connectivity error")
 
-    assert calls == {"plan": 0, "search": 0}
+    assert calls == {"plan": 1, "search": 1}
 
 
 def test_keyword_values_use_cell_values_and_ignore_column_names():

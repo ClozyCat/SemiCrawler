@@ -422,9 +422,17 @@ function TaskPanel({ task, onLogs, onTerminate, stoppingIds }) {
         <div className="task-title">
           {task.source_snapshot.map((item) => item.name).join('、')}
         </div>
-        <div className="task-time">
-          <Clock />
-          <span>{formatTime(task.completed_at || task.created_at)}</span>
+        <div className="task-times">
+          <div className="task-time">
+            <Clock />
+            <span>开始时间</span>
+            <b>{formatTime(task.started_at)}</b>
+          </div>
+          <div className="task-time">
+            <CheckCircle />
+            <span>结束时间</span>
+            <b>{formatTime(task.completed_at)}</b>
+          </div>
         </div>
         <div className="task-stats">
           <div className="task-stat-item">
@@ -1863,7 +1871,8 @@ function HistoryView({
                   <th>采集信息源</th>
                   <th>状态</th>
                   <th>保存原文 / 结构化 / 失败</th>
-                  <th>创建时间</th>
+                  <th>开始时间</th>
+                  <th>结束时间</th>
                   <th>操作</th>
                 </tr>
               </thead>
@@ -1891,6 +1900,7 @@ function HistoryView({
                       <b>{task.fetched_count}</b> / <b>{task.structured_count}</b> / <b>{task.failed_count}</b>
                     </td>
                     <td>{formatTime(task.created_at)}</td>
+                    <td>{formatTime(task.completed_at)}</td>
                     <td>
                       <div className="row-actions">
                         <button className="text-btn" onClick={() => onLogs(task.id)}>

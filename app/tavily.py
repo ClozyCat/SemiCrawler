@@ -57,10 +57,20 @@ class TavilyClient:
             raise TavilyError("Tavily 返回格式无效")
         return data
 
-    def search(self, query: str, *, num: int = 10, start_date: date | None = None) -> list[TavilySearchItem]:
+    def search(
+        self,
+        query: str,
+        *,
+        num: int = 10,
+        topic: str = "general",
+        start_date: date | None = None,
+        end_date: date | None = None,
+        domains: list[str] | None = None,
+    ) -> list[TavilySearchItem]:
         payload: dict[str, Any] = {
             "api_key": self.api_key,
             "query": query,
+            "topic": topic,
             "search_depth": "advanced",
             "max_results": min(max(num, 1), 20),
             "include_answer": False,
@@ -69,6 +79,10 @@ class TavilyClient:
         }
         if start_date:
             payload["start_date"] = start_date.isoformat()
+        if end_date:
+            payload["end_date"] = end_date.isoformat()
+        if domains:
+            payload["include_domains"] = list(dict.fromkeys(domains))
         data = self._post("search", payload)
         items: list[TavilySearchItem] = []
         for raw in data.get("results", []):

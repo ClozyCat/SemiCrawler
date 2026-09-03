@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from collections.abc import Callable
 from datetime import date
 from typing import Any
@@ -89,6 +90,9 @@ class ModelOutputError(ValueError):
 
 # Leave enough room for a complete structured JSON response on longer articles.
 MAX_OUTPUT_TOKENS = 8192
+SEARCH_REVIEW_OUTPUT_TOKENS = 16384
+SEARCH_REVIEW_BATCH_SIZE = 10
+SEARCH_REVIEW_MAX_ATTEMPTS = 3
 MODEL_TIMEOUT = httpx.Timeout(connect=10, read=240, write=30, pool=10)
 
 
@@ -240,14 +244,19 @@ def _uses_deepseek_v4_reasoning_controls(setting: ModelSetting) -> bool:
     return hostname == "api.deepseek.com" and setting.model_name.lower().startswith("deepseek-v4-")
 
 
-def _call(setting: ModelSetting, messages: list[dict[str, str]]) -> str:
+def _call(
+    setting: ModelSetting,
+    messages: list[dict[str, str]],
+    *,
+    max_tokens: int = MAX_OUTPUT_TOKENS,
+) -> str:
     url = setting.base_url.rstrip("/") + "/chat/completions"
     payload: dict[str, Any] = {
         "model": setting.model_name,
         "messages": messages,
         "temperature": 0,
         "response_format": {"type": "json_object"},
-        "max_tokens": MAX_OUTPUT_TOKENS,
+        "max_tokens": max_tokens,
     }
     if _uses_deepseek_v4_reasoning_controls(setting):
         payload["reasoning_effort"] = "low"
@@ -349,28 +358,52 @@ def review_search_results(
     start_date: date | None = None,
 ) -> list[int]:
     """Ask the LLM to screen search indexes before expensive page extraction."""
-    request = {
-        "topic": topic,
-        "start_date": start_date.isoformat() if start_date else None,
-        "results": results,
-        "schema": SearchReview.model_json_schema(),
-    }
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是产业项目情报审阅员。仅保留明确包含项目、产线、工厂、基地等真实产业行动的信息，"
-                "例如立项、签约、投资、开工、建设、投产、扩产、验收。过滤推广性新闻、会议/展会预告、"
-                "活动公告、广告、招聘和纯技术观点；过滤发布日期早于指定起始日期的条目。"
-                "根据输入索引的 0-based index 返回 keep 数组，不要改写索引，不确定就过滤。只输出 JSON。"
-            ),
-        },
-        {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
-    ]
-    raw = _call(setting, messages)
-    review = SearchReview.model_validate_json(_json_text(raw))
-    valid = set(range(len(results)))
-    return [index for index in dict.fromkeys(review.keep) if index in valid]
+    kept: list[int] = []
+    for offset in range(0, len(results), SEARCH_REVIEW_BATCH_SIZE):
+        batch = results[offset : offset + SEARCH_REVIEW_BATCH_SIZE]
+        indexed_batch = [
+            {**item, "index": int(item.get("index", offset + index))}
+            for index, item in enumerate(batch)
+        ]
+        request = {
+            "topic": topic,
+            "start_date": start_date.isoformat() if start_date else None,
+            "results": indexed_batch,
+            "schema": SearchReview.model_json_schema(),
+        }
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是产业项目情报审阅员。仅保留明确包含项目、产线、工厂、基地等真实产业行动的信息，"
+                    "例如立项、签约、投资、开工、建设、投产、扩产、验收。过滤推广性新闻、会议/展会预告、"
+                    "活动公告、广告、招聘和纯技术观点；过滤发布日期早于指定起始日期的条目。"
+                    "published_date 缺失时不要仅因日期未知而过滤，相关性无法仅凭摘要确定时应保留以便读取正文。"
+                    "根据输入中每项的 index 原样返回 keep 数组。只输出 JSON。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(request, ensure_ascii=False)},
+        ]
+        for attempt in range(SEARCH_REVIEW_MAX_ATTEMPTS):
+            try:
+                raw = _call(
+                    setting,
+                    messages,
+                    max_tokens=SEARCH_REVIEW_OUTPUT_TOKENS,
+                )
+                break
+            except (
+                httpx.RemoteProtocolError,
+                httpx.ReadError,
+                httpx.ConnectError,
+            ):
+                if attempt + 1 == SEARCH_REVIEW_MAX_ATTEMPTS:
+                    raise
+                time.sleep(2**attempt)
+        review = SearchReview.model_validate_json(_json_text(raw))
+        valid = {item["index"] for item in indexed_batch}
+        kept.extend(index for index in review.keep if index in valid)
+    return list(dict.fromkeys(kept))
 
 
 def _public_model_error(exc: Exception) -> str:

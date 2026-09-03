@@ -4,7 +4,8 @@ import hashlib
 import json
 import re
 import time
-from datetime import date, datetime
+from datetime import UTC, date, datetime
+from email.utils import parsedate_to_datetime
 from functools import lru_cache
 from typing import Any
 from urllib.parse import urljoin, urlparse, urlunparse
@@ -16,7 +17,6 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from .tavily import TavilyClient, TavilyError
 from .llm import (
     ModelOutputError,
     plan_search_queries,
@@ -31,6 +31,7 @@ from .source_config import (
     source_type,
     validate_source_config,
 )
+from .tavily import TavilyClient, TavilyError
 
 USER_AGENT = "SemiCrawler/1.0 (+public-news-collector)"
 
@@ -197,6 +198,20 @@ def parse_date(text: str, formats: list[str]) -> date | None:
     return None
 
 
+def parse_search_result_date(value: str | None) -> date | None:
+    """Parse Tavily news dates, which are commonly RFC 2822 timestamps."""
+    if not value:
+        return None
+    try:
+        return parsedate_to_datetime(value).date()
+    except (TypeError, ValueError, OverflowError):
+        pass
+    try:
+        return date.fromisoformat(value[:10])
+    except ValueError:
+        return parse_date(value, ["%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日"])
+
+
 def parse_article(html: str, url: str, config: SourceConfig) -> dict[str, Any]:
     soup = BeautifulSoup(html, "html.parser")
     title = _text(soup.select_one(config.selectors.title))[:500]
@@ -318,27 +333,49 @@ def collect_web_search_source(
     )
     db.commit()
 
-    domains = re.findall(r"(?<![@\w])(?:https?://)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)", config.source_hint, re.I)
+    domains = re.findall(
+        r"(?<![@\w])(?:https?://)?(?:www\.)?([a-z0-9-]+(?:\.[a-z0-9-]+)+)",
+        config.source_hint,
+        re.IGNORECASE,
+    )
     domains = list(dict.fromkeys(domain.lower() for domain in domains))
-    search_specs = [
-        (planned_query, domain)
-        for planned_query in planned_queries
-        for domain in (domains or [None])
-    ]
+    search_specs = planned_queries
     result_batches = []
     search_errors: list[TavilyError] = []
-    for planned_query, domain in search_specs:
+    relaxed_searches = 0
+    api_searches = 0
+    for planned_query in search_specs:
         ensure_task_active(db, task)
-        search_query = f"site:{domain} {planned_query}" if domain else planned_query
         try:
-            result_batches.append(tavily.search(search_query, num=config.max_results, start_date=task.start_date))
+            api_searches += 1
+            batch = tavily.search(
+                planned_query,
+                num=config.max_results,
+                topic="general",
+                start_date=task.start_date,
+                end_date=datetime.now(UTC).date(),
+                domains=domains or None,
+            )
+            if not batch:
+                # Government notices and corporate project pages are often absent
+                # from Tavily's dated index. Retry without API-side dates, then
+                # enforce the task date against result metadata and page content.
+                api_searches += 1
+                relaxed_searches += 1
+                batch = tavily.search(
+                    planned_query,
+                    num=config.max_results,
+                    topic="general",
+                    domains=domains or None,
+                )
+            result_batches.append(batch)
         except TavilyError as exc:
             search_errors.append(exc)
             db.add(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Tavily 查询失败 {search_query}：{exc}",
+                    message=f"Tavily 查询失败 {planned_query}：{exc}",
                 )
             )
             db.commit()
@@ -346,6 +383,16 @@ def collect_web_search_source(
         raise search_errors[0]
     results = merge_ranked_search_results(result_batches)
     ensure_task_active(db, task)
+    search_result_count = len(results)
+    prefiltered_results = []
+    index_date_filtered = 0
+    for item in results:
+        published_at = parse_search_result_date(item.published_date)
+        if published_at and published_at < task.start_date:
+            index_date_filtered += 1
+            continue
+        prefiltered_results.append(item)
+    results = prefiltered_results
     review_payload = [
         {"index": index, "title": item.title, "url": str(item.url), "snippet": item.content, "published_date": item.published_date}
         for index, item in enumerate(results)
@@ -359,7 +406,8 @@ def collect_web_search_source(
     results = [item for index, item in enumerate(results) if index in set(keep_indexes)]
     configured = json.loads(task.keyword_config_json or "[]")
     groups = keyword_groups(configured) if task.keyword_filter_enabled else {}
-    saved = structured = deduped = date_filtered = keyword_filtered = 0
+    saved = structured = deduped = keyword_filtered = 0
+    date_filtered = index_date_filtered
     pages = 0
     failed = 0
     for search_item in results:
@@ -378,7 +426,7 @@ def collect_web_search_source(
             url = canonical_url(str(page.url), str(page.url))
             body = page.text.strip()
             title = page.title or search_item.title
-            published_at = parse_date(
+            published_at = parse_search_result_date(search_item.published_date) or parse_date(
                 f"{title}\n{search_item.content}\n{body[:4000]}",
                 ["%Y-%m-%d", "%Y/%m/%d", "%Y年%m月%d日"],
             )
@@ -411,6 +459,10 @@ def collect_web_search_source(
             )
             db.add(article)
             db.flush()
+            saved += 1
+            task.fetched_count += 1
+            # Publish the raw article immediately; structuring may take much longer.
+            db.commit()
             source_name = (urlparse(url).hostname or snapshot["name"]).removeprefix("www.")
             created = structure_article(db, article, setting, source_name=source_name)
             ensure_task_active(db, task)
@@ -418,8 +470,6 @@ def collect_web_search_source(
             if article.status == "review_required":
                 failed += 1
                 db.add(TaskLog(task_id=task.id, level="error", message=f"结构化待审核 {url}: {article.error_message}"))
-            saved += 1
-            task.fetched_count += 1
             task.structured_count += created
         except TaskTerminationRequested:
             raise
@@ -439,9 +489,11 @@ def collect_web_search_source(
             task_id=task.id,
             message=(
                 f"Tavily 联网检索完成 {snapshot['name']}："
-                f"执行 {len(search_specs)} 条搜索查询（{len(planned_queries)} 个关键词 × "
-                f"{len(domains) or 1} 个来源域名），"
-                f"合并找到 {len(results)} 篇，读取 {len(pages)} 篇，"
+                f"执行 {len(search_specs)} 组搜索查询（{len(planned_queries)} 个关键词，"
+                f"{len(domains) or 0} 个限定来源域名），实际请求 {api_searches} 次，"
+                f"其中无日期放宽重试 {relaxed_searches} 次，"
+                f"合并找到 {search_result_count} 篇，索引日期预过滤 {index_date_filtered} 篇，"
+                f"审阅保留 {len(results)} 篇，读取 {pages} 篇，"
                 f"保存 {saved} 篇、结构化 {structured} 条，"
                 f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
             ),

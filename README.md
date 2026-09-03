@@ -17,7 +17,7 @@ npm run dev
 
 联网信息源使用 Tavily Search/Extract API。请在“API配置”中保存 Tavily API Key，或设置 `TAVILY_API_KEY` 环境变量。
 
-添加信息源时选择“联网搜索”，填写自然语言检索主题及可选域名。系统先让 LLM 拆分查询词，再以 `site:` 和任务起始日期调用 Tavily，交给 LLM 审阅索引后使用 Tavily Extract（失败时回退普通 HTTP）读取正文，最后沿用关键词过滤和结构化流程。
+添加信息源时选择“联网搜索”，填写自然语言检索主题及可选域名。系统先让 LLM 拆分查询词，再通过 Tavily 的通用网页索引按来源域名和任务起始日期检索；若日期索引没有召回，会自动在相同域名内放宽 API 日期条件，并在读取正文后执行本地日期过滤。索引经 LLM 审阅后使用 Tavily Extract（失败时回退普通 HTTP）读取正文，最后沿用关键词过滤和结构化流程。
 
 Tavily API 可直接在 Docker 或本地后端使用；普通网站采集和已保存数据仍可使用 Docker。
 
