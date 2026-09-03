@@ -17,6 +17,7 @@ from pydantic import ValidationError
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from .baidu import BaiduClient, BaiduError
 from .llm import (
     ModelOutputError,
     plan_search_queries,
@@ -287,7 +288,14 @@ def collect_web_search_source(
     setting = db.get(ModelSetting, 1)
     if not setting or not setting.api_key:
         raise ValueError("联网搜索需要先在 API配置 中保存结构化模型的 API Key")
-    tavily = TavilyClient(setting.tavily_api_key or None)
+    if config.provider == "baidu":
+        search_client = BaiduClient(setting.baidu_api_key or None)
+        provider_name = "百度"
+        provider_error = BaiduError
+    else:
+        search_client = TavilyClient(setting.tavily_api_key or None)
+        provider_name = "Tavily"
+        provider_error = TavilyError
     try:
         planned_queries = plan_search_queries(
             setting,
@@ -341,14 +349,14 @@ def collect_web_search_source(
     domains = list(dict.fromkeys(domain.lower() for domain in domains))
     search_specs = planned_queries
     result_batches = []
-    search_errors: list[TavilyError] = []
+    search_errors: list[ValueError] = []
     relaxed_searches = 0
     api_searches = 0
     for planned_query in search_specs:
         ensure_task_active(db, task)
         try:
             api_searches += 1
-            batch = tavily.search(
+            batch = search_client.search(
                 planned_query,
                 num=config.max_results,
                 topic="general",
@@ -362,20 +370,20 @@ def collect_web_search_source(
                 # enforce the task date against result metadata and page content.
                 api_searches += 1
                 relaxed_searches += 1
-                batch = tavily.search(
+                batch = search_client.search(
                     planned_query,
                     num=config.max_results,
                     topic="general",
                     domains=domains or None,
                 )
             result_batches.append(batch)
-        except TavilyError as exc:
+        except provider_error as exc:
             search_errors.append(exc)
             db.add(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Tavily 查询失败 {planned_query}：{exc}",
+                    message=f"{provider_name}查询失败 {planned_query}：{exc}",
                 )
             )
             db.commit()
@@ -415,11 +423,20 @@ def collect_web_search_source(
         page = None
         try:
             try:
-                page = tavily.extract(str(search_item.url))
-            except TavilyError:
-                html = fetch_html(str(search_item.url))
-                parsed = BeautifulSoup(html, "html.parser")
-                text = _text(parsed.body or parsed)
+                if not hasattr(search_client, "extract"):
+                    raise AttributeError("当前搜索服务不提供正文提取接口")
+                page = search_client.extract(str(search_item.url))
+            except (provider_error, AttributeError):
+                try:
+                    html = fetch_html(str(search_item.url))
+                    parsed = BeautifulSoup(html, "html.parser")
+                    text = _text(parsed.body or parsed)
+                    if not text.strip():
+                        text = search_item.content.strip()
+                except Exception:
+                    text = search_item.content.strip()
+                    if not text:
+                        raise
                 page = type("Page", (), {"url": str(search_item.url), "title": search_item.title, "text": text})()
             pages += 1
             ensure_task_active(db, task)
@@ -479,7 +496,7 @@ def collect_web_search_source(
                 TaskLog(
                     task_id=task.id,
                     level="error",
-                    message=f"Tavily 抓取失败 {search_item.url}: {exc}",
+                    message=f"{provider_name}结果抓取失败 {search_item.url}: {exc}",
                 )
             )
             db.commit()
@@ -488,7 +505,7 @@ def collect_web_search_source(
         TaskLog(
             task_id=task.id,
             message=(
-                f"Tavily 联网检索完成 {snapshot['name']}："
+                f"{provider_name}联网检索完成 {snapshot['name']}："
                 f"执行 {len(search_specs)} 组搜索查询（{len(planned_queries)} 个关键词，"
                 f"{len(domains) or 0} 个限定来源域名），实际请求 {api_searches} 次，"
                 f"其中无日期放宽重试 {relaxed_searches} 次，"

@@ -37,6 +37,7 @@ const ALL_NAV = NAV_GROUPS.flatMap((g) => g.items)
 
 const EMPTY_FORM = {
   mode: 'crawler',
+  search_provider: 'baidu',
   name: '',
   base_url: '',
   enabled: true,
@@ -60,7 +61,13 @@ const EMPTY_FORM = {
 }
 
 const DASHSCOPE_BASE_URL = 'https://dashscope.aliyuncs.com/compatible-mode/v1'
+const BAIDU_BASE_URL = 'https://qianfan.baidubce.com'
 const TAVILY_BASE_URL = 'https://api.tavily.com'
+
+function sourceSearchProvider(source) {
+  if (source.config?.provider) return source.config.provider
+  return /(?:api\.tavily\.com|dokobot\.ai)/i.test(source.base_url || '') ? 'tavily' : 'baidu'
+}
 
 
 function formatTime(value) {
@@ -123,6 +130,7 @@ function SourceForm({ source, onClose, onSaved }) {
     ...source,
     mode: source.source_type || (source.config?.type === 'web_search' ? 'web_search' : 'crawler'),
     search_query: source.config?.query || '',
+    search_provider: sourceSearchProvider(source),
     source_hint: source.config?.source_hint || '',
     max_results: source.config?.max_results || 10,
     config: JSON.stringify(source.config, null, 2),
@@ -141,10 +149,11 @@ function SourceForm({ source, onClose, onSaved }) {
       const query = form.search_query.trim()
       const payload = isSearch ? {
         name: `联网搜索：${query.replace(/\s+/g, ' ').slice(0, 42)}`,
-        base_url: TAVILY_BASE_URL,
+        base_url: form.search_provider === 'tavily' ? TAVILY_BASE_URL : BAIDU_BASE_URL,
         enabled: form.enabled,
         config: {
           type: 'web_search',
+          provider: form.search_provider,
           query,
           source_hint: form.source_hint.trim(),
           max_results: Number(form.max_results),
@@ -205,7 +214,7 @@ function SourceForm({ source, onClose, onSaved }) {
             className={form.mode === 'web_search' ? 'active' : ''}
             onClick={() => setForm({ ...form, mode: 'web_search' })}
           >
-            <Globe2 /> Tavily 联网搜索
+            <Globe2 /> 联网搜索
           </button>
         </div>
 
@@ -272,6 +281,16 @@ function SourceForm({ source, onClose, onSaved }) {
             </>
           ) : (
             <div className="search-source-fields full form-grid">
+              <label className="field">
+                <span>搜索引擎</span>
+                <select
+                  value={form.search_provider}
+                  onChange={(e) => setForm({ ...form, search_provider: e.target.value })}
+                >
+                  <option value="baidu">百度搜索（默认）</option>
+                  <option value="tavily">Tavily</option>
+                </select>
+              </label>
               <label className="field full">
                 <span>检索主题与关键意图</span>
                 <textarea
@@ -305,7 +324,10 @@ function SourceForm({ source, onClose, onSaved }) {
               </label>
               <div className="source-mode-note full">
                 <Globe2 />
-                <span>任务执行时由 Tavily 搜索、审阅并提取网页正文，经 AI 大模型解析生成可追溯要素记录。</span>
+                <span>
+                  任务执行时由 {form.search_provider === 'baidu' ? '百度' : 'Tavily'} 执行搜索，
+                  经索引审阅与网页正文读取后，由 AI 大模型生成可追溯要素记录。
+                </span>
               </div>
             </div>
           )}
@@ -831,6 +853,7 @@ function Dashboard({
       start_date: startDate,
       keyword_filter_enabled: keywordFilter,
       auto_structure_enabled: autoStructure,
+      keyword_config: keywordSetting.keyword_config,
     })
   }
 
@@ -840,7 +863,7 @@ function Dashboard({
         <div className="title-content">
           <span className="eyebrow">情报采集引擎</span>
           <h1>采集工作台</h1>
-          <p>调度多源爬虫与 Tavily 联网检索，实时沉淀半导体产业高价值情报。</p>
+          <p>调度多源爬虫与联网检索，实时沉淀半导体产业高价值情报。</p>
         </div>
         <div className="title-actions">
           <button className="secondary" onClick={onAddSource}>
@@ -914,7 +937,9 @@ function Dashboard({
                     </small>
                   </div>
                   <span className={`source-kind ${isWebSearch ? 'web-search' : 'custom'}`}>
-                    {isWebSearch ? '🌐 联网' : '🕷️ 爬虫'}
+                    {isWebSearch
+                      ? `🌐 ${sourceSearchProvider(source) === 'baidu' ? '百度' : 'Tavily'}`
+                      : '🕷️ 爬虫'}
                   </span>
                 </label>
               )
@@ -1519,7 +1544,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
         <div className="title-content">
           <span className="eyebrow">来源配置</span>
           <h1>信息源管理</h1>
-          <p>统一维护传统网站爬虫节点与 Tavily 联网检索任务意图。</p>
+          <p>统一维护传统网站爬虫节点与联网检索任务意图。</p>
         </div>
         <button className="primary" onClick={onAdd}>
           <Plus /> 添加信息源
@@ -1559,7 +1584,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
               <span>
                 <span className={`source-kind ${isSearch ? 'web-search' : 'custom'}`}>
                   {isSearch
-                    ? '🌐 联网 · Tavily'
+                    ? `🌐 联网 · ${sourceSearchProvider(source) === 'baidu' ? '百度' : 'Tavily'}`
                     : source.builtin ? '🏢 内置站点' : '🕷️ 自定义采集'}
                 </span>
               </span>
@@ -1598,7 +1623,7 @@ function SourcesView({ sources, onAdd, onEdit, onToggle, onDelete, deletingIds }
           <div className="blank">
             <BookOpen />
             <b>尚未配置信息源</b>
-            <span>添加网站爬虫节点或 Tavily 联网检索意图后即可开始采集。</span>
+            <span>添加网站爬虫节点或联网检索意图后即可开始采集。</span>
           </div>
         )}
       </section>
@@ -2130,6 +2155,7 @@ function SettingsView() {
     model_name: 'qwen3-max',
     api_key: '',
     request_headers: [],
+    baidu_api_key: '',
     tavily_api_key: '',
     enabled: false
   })
@@ -2142,7 +2168,13 @@ function SettingsView() {
     api.modelSetting()
       .then((data) => {
         setSaved(data)
-        setForm((old) => ({ ...old, ...data, api_key: '' }))
+        setForm((old) => ({
+          ...old,
+          ...data,
+          api_key: '',
+          baidu_api_key: '',
+          tavily_api_key: '',
+        }))
       })
       .catch((err) => setError(err.message))
   }, [])
@@ -2155,8 +2187,14 @@ function SettingsView() {
     try {
       const result = await api.saveModelSetting(form)
       setSaved(result)
-      setForm({ ...form, api_key: '' })
-      setFeedback('模型服务配置已成功保存！')
+      setForm({
+        ...form,
+        ...result,
+        api_key: '',
+        baidu_api_key: '',
+        tavily_api_key: '',
+      })
+      setFeedback('API 配置已成功保存！')
       setTimeout(() => setFeedback(''), 3500)
     } catch (err) {
       setError(err.message)
@@ -2191,7 +2229,7 @@ function SettingsView() {
         <div className="title-content">
           <span className="eyebrow">服务端基础设施</span>
           <h1>API 与模型配置</h1>
-          <p>管理 OpenAI 兼容大模型接入点与 Tavily 联网搜索服务。</p>
+          <p>管理 OpenAI 兼容大模型接入点与百度、Tavily 联网搜索服务。</p>
         </div>
       </div>
 
@@ -2235,14 +2273,19 @@ function SettingsView() {
                 </span>
                 <input
                   type="password"
+                  autoComplete="new-password"
                   value={form.api_key}
                   onChange={(e) => setForm({ ...form, api_key: e.target.value })}
                   placeholder={saved?.has_api_key ? '留空以继续使用现有密钥' : 'sk-...'}
                 />
               </label>
-              <label className="field full">
+              <label className="field">
+                <span>百度搜索 API 密钥 {saved?.has_baidu_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.baidu_api_key_hint}</small>}</span>
+                <input type="password" autoComplete="new-password" value={form.baidu_api_key || ''} onChange={(e) => setForm({ ...form, baidu_api_key: e.target.value })} placeholder={saved?.has_baidu_api_key ? '留空以继续使用现有密钥' : '百度千帆 API Key'} />
+              </label>
+              <label className="field">
                 <span>Tavily API 密钥 {saved?.has_tavily_api_key && <small style={{ marginLeft: 8, color: 'var(--emerald-600)' }}>已保存：{saved.tavily_api_key_hint}</small>}</span>
-                <input type="password" value={form.tavily_api_key || ''} onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })} placeholder={saved?.has_tavily_api_key ? '留空以继续使用现有密钥' : 'tvly-...'} />
+                <input type="password" autoComplete="new-password" value={form.tavily_api_key || ''} onChange={(e) => setForm({ ...form, tavily_api_key: e.target.value })} placeholder={saved?.has_tavily_api_key ? '留空以继续使用现有密钥' : 'tvly-...'} />
               </label>
 
               <div className="header-config full">
@@ -2589,7 +2632,7 @@ export default function App() {
           <div className="service-indicator" />
           <div className="service-info">
             <b>本地服务在线</b>
-            <small>Tavily 搜索服务</small>
+            <small>百度 / Tavily 搜索服务</small>
           </div>
         </div>
       </aside>

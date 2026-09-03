@@ -14,11 +14,16 @@ echo "[1/3] FastAPI health"
 curl --fail --silent --show-error http://127.0.0.1:8070/api/health
 echo
 
-echo "[2/3] Tavily configuration"
+echo "[2/3] Search API configuration"
+if [[ -z "${BAIDU_SEARCH_API_KEY:-${BAIDU_API_KEY:-}}" ]]; then
+  echo "WARN: Baidu Search API key is not set; configure it in API settings."
+else
+  echo "Baidu Search key is configured."
+fi
 if [[ -z "${TAVILY_API_KEY:-}" ]]; then
   echo "WARN: TAVILY_API_KEY is not set; configure it in API settings."
 else
   echo "Tavily key is configured."
 fi
 echo "[3/3] Complete"
-echo "OK: API and Tavily configuration checks completed."
+echo "OK: API and search configuration checks completed."

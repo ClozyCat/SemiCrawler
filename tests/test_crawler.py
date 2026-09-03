@@ -228,6 +228,106 @@ def test_web_search_uses_tavily_pages_then_structures_them(monkeypatch):
         assert captured["model"] == "test-model"
 
 
+def test_web_search_uses_baidu_when_provider_selected(monkeypatch):
+    calls = []
+    captured = {}
+
+    class FakeBaiduClient:
+        def __init__(self, api_key):
+            assert api_key == "baidu-secret"
+
+        def search(self, query, **kwargs):
+            calls.append((query, kwargs))
+            return [
+                TavilySearchItem(
+                    title="百度搜索结果",
+                    url="https://news.example.com/baidu-result",
+                    content="2026年8月21日，先进封装项目正式开工并建设生产线。" * 5,
+                    published_date="2026-08-21",
+                )
+            ]
+
+    monkeypatch.setattr("app.crawler.BaiduClient", FakeBaiduClient)
+    monkeypatch.setattr(
+        "app.crawler.TavilyClient",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("Tavily should not be initialized")
+        ),
+    )
+    monkeypatch.setattr(
+        "app.crawler.plan_search_queries", lambda setting, topic, **kwargs: [topic]
+    )
+    monkeypatch.setattr(
+        "app.crawler.review_search_results",
+        lambda setting, topic, results, **kwargs: list(range(len(results))),
+    )
+    monkeypatch.setattr(
+        "app.crawler.fetch_html",
+        lambda url, *args, **kwargs: (_ for _ in ()).throw(
+            ValueError("site blocked direct fetch")
+        ),
+    )
+
+    def fake_structure(db, article, setting, **kwargs):
+        captured["body"] = article.body
+        return 1
+
+    monkeypatch.setattr("app.crawler.structure_article", fake_structure)
+    raw_config = {
+        "type": "web_search",
+        "provider": "baidu",
+        "query": "先进封装开工",
+        "source_hint": "",
+        "max_results": 10,
+    }
+
+    with SessionLocal() as db:
+        source = Source(
+            name="百度测试",
+            base_url="https://qianfan.baidubce.com",
+            config_json=json.dumps(raw_config),
+        )
+        db.add(source)
+        db.add(
+            ModelSetting(
+                id=1,
+                base_url="https://api.example.com",
+                model_name="test-model",
+                api_key="secret",
+                baidu_api_key="baidu-secret",
+            )
+        )
+        db.flush()
+        task = CollectionTask(
+            status="running",
+            start_date=date(2026, 8, 20),
+            source_ids_json=f"[{source.id}]",
+            source_snapshot_json="[]",
+            keyword_config_json="[]",
+        )
+        db.add(task)
+        db.flush()
+
+        result = collect_source(
+            db,
+            task,
+            {
+                "id": source.id,
+                "name": source.name,
+                "base_url": source.base_url,
+                "config": raw_config,
+            },
+        )
+
+        assert result == (1, 0, 0, 1, 0, 0)
+        assert len(calls) == 1
+        assert calls[0][1]["start_date"] == date(2026, 8, 20)
+        assert captured["body"].startswith("2026年8月21日")
+        db.flush()
+        logs = db.scalars(select(TaskLog).where(TaskLog.task_id == task.id)).all()
+        assert any("百度联网检索完成" in log.message for log in logs)
+
+
 def test_web_search_executes_five_planned_queries_plus_original_and_merges_results(
     monkeypatch,
 ):

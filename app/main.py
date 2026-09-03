@@ -146,8 +146,11 @@ def list_sources(db: Session = Depends(get_db)):
 def create_source(payload: SourceCreate, db: Session = Depends(get_db)):
     if db.scalar(select(Source).where(Source.name == payload.name)):
         raise HTTPException(409, "来源名称已存在")
+    candidate_config = dict(payload.config)
+    if source_type(candidate_config) == "web_search":
+        candidate_config.setdefault("provider", "baidu")
     try:
-        validated_config = validate_source_config(str(payload.base_url), payload.config)
+        validated_config = validate_source_config(str(payload.base_url), candidate_config)
     except ValueError as exc:
         raise HTTPException(422, str(exc)) from exc
     source = Source(
@@ -260,6 +263,22 @@ def create_task(
     ).all()
     if len(sources) != len(payload.source_ids):
         raise HTTPException(400, "部分来源不存在或未启用")
+    keyword_config = payload.keyword_config
+    if payload.keyword_filter_enabled and keyword_config is None:
+        setting = db.get(ModelSetting, 1)
+        keyword_config = (
+            json.loads(setting.keyword_config_json or "[]") if setting else []
+        )
+    groups = keyword_groups(keyword_config)
+    keywords_ready = (
+        all(groups.values())
+        if isinstance(keyword_config, dict)
+        else bool(groups["technical"])
+    )
+    if payload.keyword_filter_enabled and not keywords_ready:
+        raise HTTPException(400, "已启用关键词过滤，但三维关键词配置不完整")
+    if keyword_config is None:
+        keyword_config = []
     snapshots = [
         {
             "id": item.id,
@@ -279,7 +298,7 @@ def create_task(
         completed_at=None,
         keyword_filter_enabled=payload.keyword_filter_enabled,
         auto_structure_enabled=payload.auto_structure_enabled,
-        keyword_config_json=json.dumps(payload.keyword_config, ensure_ascii=False),
+        keyword_config_json=json.dumps(keyword_config, ensure_ascii=False),
     )
     db.add(task)
     db.flush()
@@ -723,8 +742,19 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
         enabled=setting.enabled,
         has_api_key=bool(setting.api_key),
         api_key_hint=hint,
+        has_baidu_api_key=bool(setting.baidu_api_key),
+        baidu_api_key_hint=(
+            "*" * max(len(setting.baidu_api_key) - 4, 0) + setting.baidu_api_key[-4:]
+            if setting.baidu_api_key
+            else ""
+        ),
         has_tavily_api_key=bool(setting.tavily_api_key),
-        tavily_api_key_hint=("*" * max(len(setting.tavily_api_key) - 4, 0) + setting.tavily_api_key[-4:]) if setting.tavily_api_key else "",
+        tavily_api_key_hint=(
+            "*" * max(len(setting.tavily_api_key) - 4, 0)
+            + setting.tavily_api_key[-4:]
+            if setting.tavily_api_key
+            else ""
+        ),
         request_headers=json.loads(setting.request_headers_json or "[]"),
         keyword_config=json.loads(setting.keyword_config_json or "[]"),
         keyword_filter_enabled=bool(setting.keyword_filter_enabled),
@@ -757,6 +787,8 @@ def update_model_setting(payload: ModelSettingUpdate, db: Session = Depends(get_
     setting.keyword_filter_enabled = payload.keyword_filter_enabled
     if payload.api_key is not None and payload.api_key.strip():
         setting.api_key = payload.api_key.strip()
+    if payload.baidu_api_key is not None and payload.baidu_api_key.strip():
+        setting.baidu_api_key = payload.baidu_api_key.strip()
     if payload.tavily_api_key is not None and payload.tavily_api_key.strip():
         setting.tavily_api_key = payload.tavily_api_key.strip()
     db.add(setting)

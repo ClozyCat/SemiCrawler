@@ -119,6 +119,24 @@ def test_web_search_source_uses_simple_natural_language_config(client):
         response.json()["config"]["query"] == "检索先进封装项目的签约、开工与扩产动态"
     )
     assert response.json()["config"]["max_results"] == 20
+    assert response.json()["config"]["provider"] == "baidu"
+
+
+def test_web_search_source_defaults_to_baidu(client):
+    response = client.post(
+        "/api/sources",
+        json={
+            "name": "百度联网搜索",
+            "base_url": "https://qianfan.baidubce.com",
+            "config": {
+                "type": "web_search",
+                "query": "检索中国半导体项目动态",
+            },
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["config"]["provider"] == "baidu"
 
 
 def test_task_snapshot_and_logs(client, monkeypatch):
@@ -172,6 +190,69 @@ def test_task_snapshots_keyword_and_structure_options(client, monkeypatch):
     assert response.json()["keyword_filter_enabled"] is True
     assert response.json()["auto_structure_enabled"] is True
     assert response.json()["keyword_config"] == config
+
+
+def test_task_uses_saved_keywords_when_legacy_client_omits_config(
+    client, monkeypatch
+):
+    monkeypatch.setattr("app.main.run_task", lambda db, task: None)
+    saved_config = {
+        "technical": [
+            {"industry": "半导体", "field": "集成电路", "keywords": "芯片"}
+        ],
+        "industry_noun": [
+            {"industry": "", "field": "", "keywords": "产业园、二期"}
+        ],
+        "industry_verb": [
+            {"industry": "", "field": "", "keywords": "建设、规划"}
+        ],
+    }
+    setting = client.put(
+        "/api/settings/model",
+        json={
+            "base_url": "https://api.example.com",
+            "model_name": "test-model",
+            "keyword_config": saved_config,
+        },
+    )
+    assert setting.status_code == 200
+    source_id = client.get("/api/sources").json()[0]["id"]
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "source_ids": [source_id],
+            "start_date": "2026-08-01",
+            "keyword_filter_enabled": True,
+        },
+    )
+
+    assert response.status_code == 201, response.text
+    assert response.json()["keyword_config"] == saved_config
+
+
+def test_task_rejects_enabled_filter_with_incomplete_keyword_dimensions(
+    client, monkeypatch
+):
+    monkeypatch.setattr("app.main.run_task", lambda db, task: None)
+    source_id = client.get("/api/sources").json()[0]["id"]
+
+    response = client.post(
+        "/api/tasks",
+        json={
+            "source_ids": [source_id],
+            "start_date": "2026-08-01",
+            "keyword_filter_enabled": True,
+            "keyword_config": {
+                "technical": [{"field": "集成电路", "keywords": "芯片"}],
+                "industry_noun": [],
+                "industry_verb": [{"keywords": "建设、规划"}],
+            },
+        },
+    )
+
+    assert response.status_code == 400
+    assert "三维关键词配置不完整" in response.json()["detail"]
 
 
 def test_queued_task_can_be_terminated(client, monkeypatch):
@@ -498,6 +579,7 @@ def test_model_setting_masks_secret(client):
             "base_url": "https://api.example.com",
             "model_name": "test-model",
             "api_key": "sk-secret1234",
+            "baidu_api_key": "baidu-secret5678",
             "request_headers": [
                 {"key": "X-API-Version", "value": "2026-08-01"},
             ],
@@ -507,6 +589,8 @@ def test_model_setting_masks_secret(client):
     assert response.status_code == 200
     assert response.json()["has_api_key"] is True
     assert response.json()["api_key_hint"].endswith("1234")
+    assert response.json()["has_baidu_api_key"] is True
+    assert response.json()["baidu_api_key_hint"].endswith("5678")
     assert response.json()["request_headers"] == [
         {"key": "X-API-Version", "value": "2026-08-01"},
     ]

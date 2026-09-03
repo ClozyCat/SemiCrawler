@@ -56,6 +56,7 @@ class SourceConfig(BaseModel):
 
 class WebSearchSourceConfig(BaseModel):
     type: Literal["web_search"]
+    provider: Literal["baidu", "tavily"] = "baidu"
     query: str = Field(min_length=2, max_length=2000)
     source_hint: str = Field(default="", max_length=2000)
     max_results: int = Field(default=10, ge=1, le=20)
@@ -74,7 +75,15 @@ def validate_source_config(
     base_url: str, config: dict[str, Any]
 ) -> SourceConfig | WebSearchSourceConfig:
     if source_type(config) == "web_search":
-        return WebSearchSourceConfig.model_validate(config)
+        normalized = dict(config)
+        if "provider" not in normalized:
+            # Preserve sources created before provider selection existed. The old
+            # UI used Tavily and stored one of these service hosts as base_url.
+            host = (urlparse(base_url).hostname or "").lower()
+            normalized["provider"] = (
+                "tavily" if host in {"api.tavily.com", "dokobot.ai"} else "baidu"
+            )
+        return WebSearchSourceConfig.model_validate(normalized)
     parsed = SourceConfig.model_validate(config)
     allowed_host = (urlparse(base_url).hostname or "").lower()
     if not allowed_host:

@@ -46,6 +46,7 @@ def migrate_legacy_database() -> None:
             "amount_note": "VARCHAR(200)",
         },
         "model_settings": {
+            "baidu_api_key": "TEXT DEFAULT ''",
             "tavily_api_key": "TEXT DEFAULT ''",
             "request_headers_json": "TEXT DEFAULT '[]'",
             "keyword_config_json": "TEXT DEFAULT '[]'",
