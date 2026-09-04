@@ -56,7 +56,7 @@ class ModelSetting(Base):
     tavily_api_key: Mapped[str] = mapped_column(Text, default="")
     anysearch_api_key: Mapped[str] = mapped_column(Text, default="")
     request_headers_json: Mapped[str] = mapped_column(Text, default="[]")
-    enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     keyword_config_json: Mapped[str] = mapped_column(Text, default="[]")
     keyword_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     updated_at: Mapped[datetime] = mapped_column(

@@ -839,7 +839,6 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
     return ModelSettingRead(
         base_url=setting.base_url,
         model_name=setting.model_name,
-        enabled=setting.enabled,
         has_api_key=bool(setting.api_key),
         api_key_hint=hint,
         has_baidu_api_key=bool(setting.baidu_api_key),
@@ -872,7 +871,7 @@ def setting_read(setting: ModelSetting) -> ModelSettingRead:
 def get_model_setting(db: Session = Depends(get_db)):
     setting = db.get(ModelSetting, 1)
     if not setting:
-        setting = ModelSetting(id=1)
+        setting = ModelSetting(id=1, enabled=True)
         db.add(setting)
         db.commit()
         db.refresh(setting)
@@ -884,7 +883,9 @@ def update_model_setting(payload: ModelSettingUpdate, db: Session = Depends(get_
     setting = db.get(ModelSetting, 1) or ModelSetting(id=1)
     setting.base_url = str(payload.base_url).rstrip("/")
     setting.model_name = payload.model_name
-    setting.enabled = payload.enabled
+    # Automatic structuring is always enabled; model availability is determined
+    # by whether an API key has been configured.
+    setting.enabled = True
     if payload.request_headers is not None:
         setting.request_headers_json = json.dumps(
             [header.model_dump() for header in payload.request_headers],

@@ -268,7 +268,6 @@ class ModelSettingUpdate(BaseModel):
     tavily_api_key: str | None = None
     anysearch_api_key: str | None = None
     request_headers: list[RequestHeaderSetting] | None = None
-    enabled: bool = False
     keyword_config: Any = Field(default_factory=list)
     keyword_filter_enabled: bool = False
 
@@ -288,7 +287,6 @@ class ModelSettingUpdate(BaseModel):
 class ModelSettingRead(BaseModel):
     base_url: str
     model_name: str
-    enabled: bool
     has_api_key: bool
     api_key_hint: str
     has_baidu_api_key: bool = False

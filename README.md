@@ -13,7 +13,7 @@ npm run dev
 
 打开 `http://127.0.0.1:5173`。SQLite 数据默认写入 `data/semi_crawler.db`，可用 `SEMICRAWLER_DATA_DIR` 或 `SEMICRAWLER_DATABASE_URL` 调整。
 
-在“API配置”页面填写兼容 API 地址、模型名和 API Key 后启用自动结构化。密钥仅由后端保存，读取接口只返回掩码。未启用模型时，普通网站文章会保留为待结构化原文，不会丢失。
+在“API配置”页面填写兼容 API 地址、模型名和 API Key 后，普通网站文章会自动结构化。密钥仅由后端保存，读取接口只返回掩码。未配置模型 API Key 时，普通网站文章会保留为待结构化原文，不会丢失。
 
 联网信息源可逐个选择 Anysearch、百度搜索或 Tavily，新建来源默认使用 Anysearch。请在“API配置”中保存对应的 API Key；也可以通过 `ANYSEARCH_API_KEY`、`BAIDU_SEARCH_API_KEY`（兼容 `BAIDU_API_KEY`）或 `TAVILY_API_KEY` 环境变量提供密钥。
 

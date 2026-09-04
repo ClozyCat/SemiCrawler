@@ -520,9 +520,9 @@ def structure_pending(
 ) -> tuple[int, int]:
     setting = db.get(ModelSetting, 1)
     articles = db.scalars(select(RawArticle).where(RawArticle.task_id == task.id, RawArticle.status == "pending")).all()
-    if not setting or not setting.enabled or not setting.api_key:
+    if not setting or not setting.api_key:
         if articles:
-            db.add(TaskLog(task_id=task.id, level="notice", message="模型未启用，原文已保存为待结构化"))
+            db.add(TaskLog(task_id=task.id, level="notice", message="模型 API Key 未配置，原文已保存为待结构化"))
         return 0, 0
     count = failed = 0
     for article in articles:

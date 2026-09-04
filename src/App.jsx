@@ -2500,8 +2500,7 @@ function SettingsView() {
     request_headers: [],
     baidu_api_key: '',
     tavily_api_key: '',
-    anysearch_api_key: '',
-    enabled: false
+    anysearch_api_key: ''
   })
   const [saved, setSaved] = useState(null)
   const [error, setError] = useState('')
@@ -2670,15 +2669,6 @@ function SettingsView() {
                 </div>
               </div>
 
-              <label className="check-field full">
-                <input
-                  type="checkbox"
-                  checked={form.enabled}
-                  onChange={(e) => setForm({ ...form, enabled: e.target.checked })}
-                />
-                <span>爬虫采集时启用普通网站原文自动结构化</span>
-              </label>
-
               {feedback && (
                 <p className="form-success full">
                   <CheckCircle /> {feedback}
@@ -2754,7 +2744,7 @@ export default function App() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [keywordSetting, setKeywordSetting] = useState({
-    keyword_config: [], keyword_filter_enabled: false, enabled: false
+    keyword_config: [], keyword_filter_enabled: false
   })
 
   const load = useCallback(async () => {

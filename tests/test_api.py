@@ -6,7 +6,13 @@ from openpyxl import load_workbook
 from app.constants import EXPORT_COLUMNS
 from app.database import SessionLocal
 from app.main import _scheduled_task_payload
-from app.models import RawArticle, ScheduledTask, SourceVersion, StructuredRecord
+from app.models import (
+    ModelSetting,
+    RawArticle,
+    ScheduledTask,
+    SourceVersion,
+    StructuredRecord,
+)
 
 
 def test_defaults_sources_and_meta(client):
@@ -604,7 +610,7 @@ def test_manual_structure_requires_configured_model(client):
     assert "API Key" in response.json()["detail"]
 
 
-def test_manual_structure_ignores_auto_structure_switch(client, monkeypatch):
+def test_model_auto_structure_is_always_enabled(client, monkeypatch):
     from app.database import SessionLocal
     from app.models import Source
 
@@ -618,6 +624,10 @@ def test_manual_structure_ignores_auto_structure_switch(client, monkeypatch):
         },
     )
     assert setting.status_code == 200
+    assert "enabled" not in setting.json()
+
+    with SessionLocal() as db:
+        assert db.get(ModelSetting, 1).enabled is True
 
     with SessionLocal() as db:
         source = db.query(Source).first()

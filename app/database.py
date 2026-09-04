@@ -46,6 +46,7 @@ def migrate_legacy_database() -> None:
             "amount_note": "VARCHAR(200)",
         },
         "model_settings": {
+            "enabled": "BOOLEAN DEFAULT 1",
             "baidu_api_key": "TEXT DEFAULT ''",
             "tavily_api_key": "TEXT DEFAULT ''",
             "anysearch_api_key": "TEXT DEFAULT ''",
@@ -92,4 +93,11 @@ def migrate_legacy_database() -> None:
                     SELECT COUNT(*) FROM raw_articles WHERE raw_articles.task_id = collection_tasks.id
                 )
             """)
+            )
+        if "model_settings" in tables:
+            connection.execute(
+                text(
+                    "UPDATE model_settings SET enabled = 1 "
+                    "WHERE enabled IS NULL OR enabled = 0"
+                )
             )
