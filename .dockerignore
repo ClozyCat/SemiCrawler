@@ -10,3 +10,4 @@ dist
 data/*.db-shm
 data/*.db-wal
 .npm-cache
+.env
