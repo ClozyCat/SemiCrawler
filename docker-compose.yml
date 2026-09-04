@@ -1,4 +1,20 @@
 services:
+  crawl4ai:
+    image: unclecode/crawl4ai:0.9.3
+    environment:
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-semicrawler-local-crawl4ai-token}
+    shm_size: "1gb"
+    mem_limit: "2g"
+    expose:
+      - "11235"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import os, urllib.request; request = urllib.request.Request('http://127.0.0.1:11235/health', headers={'Authorization': 'Bearer ' + os.environ['CRAWL4AI_API_TOKEN']}); urllib.request.urlopen(request, timeout=5)\""]
+      interval: 15s
+      timeout: 8s
+      retries: 10
+      start_period: 30s
+
   backend:
     build:
       context: .
@@ -12,10 +28,18 @@ services:
       BAIDU_API_KEY: ${BAIDU_API_KEY:-}
       TAVILY_API_KEY: ${TAVILY_API_KEY:-}
       ANYSEARCH_API_KEY: ${ANYSEARCH_API_KEY:-}
+      CRAWL4AI_ENABLED: ${CRAWL4AI_ENABLED:-true}
+      CRAWL4AI_BASE_URL: http://crawl4ai:11235
+      CRAWL4AI_API_TOKEN: ${CRAWL4AI_API_TOKEN:-semicrawler-local-crawl4ai-token}
+      CRAWL4AI_TIMEOUT_SECONDS: ${CRAWL4AI_TIMEOUT_SECONDS:-90}
+      CRAWL4AI_MIN_CONTENT_CHARS: ${CRAWL4AI_MIN_CONTENT_CHARS:-200}
     volumes:
       - ./data:/app/data
     expose:
       - "8000"
+    depends_on:
+      crawl4ai:
+        condition: service_healthy
     restart: unless-stopped
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]

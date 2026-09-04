@@ -4,6 +4,7 @@ from pathlib import Path
 
 TEST_DIR = Path(tempfile.mkdtemp(prefix="semi-crawler-tests-"))
 os.environ["SEMICRAWLER_DATABASE_URL"] = f"sqlite:///{(TEST_DIR / 'test.db').as_posix()}"
+os.environ["CRAWL4AI_ENABLED"] = "false"
 
 import pytest
 from fastapi.testclient import TestClient

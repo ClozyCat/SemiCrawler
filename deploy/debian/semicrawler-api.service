@@ -1,7 +1,7 @@
 [Unit]
 Description=SemiCrawler FastAPI service
-Wants=network-online.target semicrawler-chrome.service
-After=network-online.target semicrawler-chrome.service
+Wants=network-online.target semicrawler-crawl4ai.service
+After=network-online.target semicrawler-crawl4ai.service
 
 [Service]
 Type=simple

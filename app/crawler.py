@@ -19,6 +19,7 @@ from sqlalchemy.orm import Session
 
 from .baidu import BaiduClient, BaiduError
 from .anysearch import AnySearchClient, AnySearchError
+from .crawl4ai import Crawl4AIClient, Crawl4AIError, Crawl4AIPage
 from .llm import (
     ModelOutputError,
     plan_search_queries,
@@ -129,6 +130,40 @@ def merge_ranked_search_results(
                     break
         rank += 1
     return merged
+
+
+def extract_search_result_page(
+    search_client: Any,
+    provider_error: type[Exception],
+    search_item: Any,
+    crawl4ai_client: Crawl4AIClient,
+) -> tuple[Any, str]:
+    """Read a search result using provider extraction, Crawl4AI, then snippet."""
+    failures: list[str] = []
+    if hasattr(search_client, "extract"):
+        try:
+            return search_client.extract(str(search_item.url)), "provider"
+        except provider_error as exc:
+            failures.append(f"服务商提取失败：{exc}")
+
+    if crawl4ai_client.enabled:
+        try:
+            return crawl4ai_client.extract(str(search_item.url)), "crawl4ai"
+        except Crawl4AIError as exc:
+            failures.append(str(exc))
+
+    text = str(getattr(search_item, "content", "") or "").strip()
+    if text:
+        return (
+            Crawl4AIPage(
+                url=str(search_item.url),
+                title=str(getattr(search_item, "title", "") or ""),
+                text=text,
+            ),
+            "snippet",
+        )
+    detail = "；".join(failures) or "服务商未提供正文提取，且 Crawl4AI 未启用"
+    raise ValueError(f"无法读取网页正文：{detail}")
 
 
 def is_low_value_event_promotion(title: str, body: str) -> bool:
@@ -301,6 +336,7 @@ def collect_web_search_source(
         search_client = AnySearchClient(setting.anysearch_api_key or None)
         provider_name = "AnySearch"
         provider_error = AnySearchError
+    crawl4ai_client = Crawl4AIClient()
     try:
         planned_queries = plan_search_queries(
             setting,
@@ -442,26 +478,17 @@ def collect_web_search_source(
     date_filtered = index_date_filtered
     pages = 0
     failed = 0
+    extraction_counts = {"provider": 0, "crawl4ai": 0, "snippet": 0}
     for search_item in results:
         ensure_task_active(db, task)
-        page = None
         try:
-            try:
-                if not hasattr(search_client, "extract"):
-                    raise AttributeError("当前搜索服务不提供正文提取接口")
-                page = search_client.extract(str(search_item.url))
-            except (provider_error, AttributeError):
-                try:
-                    html = fetch_html(str(search_item.url))
-                    parsed = BeautifulSoup(html, "html.parser")
-                    text = _text(parsed.body or parsed)
-                    if not text.strip():
-                        text = search_item.content.strip()
-                except Exception:
-                    text = search_item.content.strip()
-                    if not text:
-                        raise
-                page = type("Page", (), {"url": str(search_item.url), "title": search_item.title, "text": text})()
+            page, extraction_method = extract_search_result_page(
+                search_client,
+                provider_error,
+                search_item,
+                crawl4ai_client,
+            )
+            extraction_counts[extraction_method] += 1
             pages += 1
             ensure_task_active(db, task)
             url = canonical_url(str(page.url), str(page.url))
@@ -535,6 +562,9 @@ def collect_web_search_source(
                 f"其中无日期放宽重试 {relaxed_searches} 次，"
                 f"合并找到 {search_result_count} 篇，索引日期预过滤 {index_date_filtered} 篇，"
                 f"审阅保留 {len(results)} 篇，读取 {pages} 篇，"
+                f"其中服务商提取 {extraction_counts['provider']} 篇、"
+                f"Crawl4AI 提取 {extraction_counts['crawl4ai']} 篇、"
+                f"摘要回退 {extraction_counts['snippet']} 篇，"
                 f"保存 {saved} 篇、结构化 {structured} 条，"
                 f"日期过滤 {date_filtered} 篇，关键词跳过 {keyword_filtered} 篇"
             ),

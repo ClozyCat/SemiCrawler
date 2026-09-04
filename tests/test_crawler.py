@@ -5,6 +5,7 @@ from sqlalchemy import func, select
 
 from app.crawler import (
     collect_source,
+    extract_search_result_page,
     discover_listing,
     is_low_value_event_promotion,
     keyword_values,
@@ -13,6 +14,7 @@ from app.crawler import (
     parse_search_result_date,
     run_task,
 )
+from app.crawl4ai import Crawl4AIError, Crawl4AIPage
 from app.database import SessionLocal
 from app.models import CollectionTask, ModelSetting, RawArticle, Source, TaskLog
 from app.source_config import SourceConfig
@@ -22,6 +24,80 @@ from app.tavily import TavilyError, TavilyPage, TavilySearchItem
 def test_parse_tavily_rfc_date():
     assert parse_search_result_date("Fri, 28 Aug 2026 02:00:00 GMT") == date(2026, 8, 28)
     assert parse_search_result_date("2025-07-01") == date(2025, 7, 1)
+
+
+def test_search_page_uses_crawl4ai_after_provider_extract_failure():
+    class FailedProvider:
+        def extract(self, url):
+            raise TavilyError("provider extraction failed")
+
+    class WorkingCrawl4AI:
+        enabled = True
+
+        def extract(self, url):
+            return Crawl4AIPage(
+                url=url,
+                title="Crawl4AI 标题",
+                text="Crawl4AI 渲染后的有效正文",
+            )
+
+    item = TavilySearchItem(
+        title="搜索标题",
+        url="https://example.com/article",
+        content="搜索摘要",
+    )
+    page, method = extract_search_result_page(
+        FailedProvider(), TavilyError, item, WorkingCrawl4AI()
+    )
+
+    assert method == "crawl4ai"
+    assert page.title == "Crawl4AI 标题"
+
+
+def test_search_page_uses_crawl4ai_for_provider_without_extract():
+    class SearchOnlyProvider:
+        pass
+
+    class WorkingCrawl4AI:
+        enabled = True
+
+        def extract(self, url):
+            return Crawl4AIPage(url=url, text="浏览器渲染正文")
+
+    item = TavilySearchItem(
+        title="百度结果",
+        url="https://example.com/article",
+        content="百度摘要",
+    )
+    page, method = extract_search_result_page(
+        SearchOnlyProvider(), ValueError, item, WorkingCrawl4AI()
+    )
+
+    assert method == "crawl4ai"
+    assert page.text == "浏览器渲染正文"
+
+
+def test_search_page_uses_snippet_after_crawl4ai_failure():
+    class SearchOnlyProvider:
+        pass
+
+    class FailedCrawl4AI:
+        enabled = True
+
+        def extract(self, url):
+            raise Crawl4AIError("browser blocked")
+
+    item = TavilySearchItem(
+        title="搜索标题",
+        url="https://example.com/article",
+        content="可用的搜索摘要",
+    )
+    page, method = extract_search_result_page(
+        SearchOnlyProvider(), ValueError, item, FailedCrawl4AI()
+    )
+
+    assert method == "snippet"
+    assert page.text == "可用的搜索摘要"
 
 
 def config(**selector_overrides):
