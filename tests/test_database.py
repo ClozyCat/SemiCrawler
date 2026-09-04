@@ -19,6 +19,21 @@ def test_legacy_database_migration_adds_baidu_api_key(tmp_path, monkeypatch):
                 """
             )
         )
+        connection.execute(
+            text(
+                """
+                CREATE TABLE scheduled_tasks (
+                    id INTEGER PRIMARY KEY,
+                    name VARCHAR(120),
+                    frequency VARCHAR(20),
+                    hour INTEGER,
+                    start_date DATE,
+                    source_ids_json TEXT,
+                    enabled BOOLEAN
+                )
+                """
+            )
+        )
 
     monkeypatch.setattr(database, "engine", legacy_engine)
     database.migrate_legacy_database()
@@ -27,3 +42,8 @@ def test_legacy_database_migration_adds_baidu_api_key(tmp_path, monkeypatch):
         column["name"] for column in inspect(legacy_engine).get_columns("model_settings")
     }
     assert "baidu_api_key" in columns
+    schedule_columns = {
+        column["name"]
+        for column in inspect(legacy_engine).get_columns("scheduled_tasks")
+    }
+    assert {"keyword_filter_enabled", "auto_structure_enabled"} <= schedule_columns

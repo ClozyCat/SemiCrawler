@@ -5,7 +5,8 @@ from openpyxl import load_workbook
 
 from app.constants import EXPORT_COLUMNS
 from app.database import SessionLocal
-from app.models import RawArticle, SourceVersion, StructuredRecord
+from app.main import _scheduled_task_payload
+from app.models import RawArticle, ScheduledTask, SourceVersion, StructuredRecord
 
 
 def test_defaults_sources_and_meta(client):
@@ -120,10 +121,28 @@ def test_scheduled_task_protects_its_source_and_can_be_managed(client):
             "hour": 9,
             "start_date": "2026-08-01",
             "source_ids": [created["id"]],
+            "keyword_filter_enabled": True,
+            "auto_structure_enabled": True,
         },
     )
     assert scheduled.status_code == 201
-    assert client.get("/api/schedules").json()[0]["frequency"] == "daily"
+    saved_schedule = client.get("/api/schedules").json()[0]
+    assert saved_schedule["frequency"] == "daily"
+    assert saved_schedule["keyword_filter_enabled"] is True
+    assert saved_schedule["auto_structure_enabled"] is True
+
+    updated = client.patch(
+        f"/api/schedules/{scheduled.json()['id']}",
+        json={**scheduled.json(), "keyword_filter_enabled": False},
+    )
+    assert updated.status_code == 200
+    assert updated.json()["keyword_filter_enabled"] is False
+    assert updated.json()["auto_structure_enabled"] is True
+    with SessionLocal() as db:
+        run_payload = _scheduled_task_payload(db.get(ScheduledTask, scheduled.json()["id"]))
+    assert run_payload.keyword_filter_enabled is False
+    assert run_payload.auto_structure_enabled is True
+    assert run_payload.keyword_config is None
     blocked = client.delete(f"/api/sources/{created['id']}")
     assert blocked.status_code == 409
     assert "定时任务" in blocked.json()["detail"]

@@ -334,7 +334,33 @@ def create_task(
 
 
 def _schedule_read(item: ScheduledTask) -> ScheduleRead:
-    return ScheduleRead.model_validate({"id": item.id, "name": item.name, "frequency": item.frequency, "hour": item.hour, "weekday": item.weekday, "monthday": item.monthday, "start_date": item.start_date, "source_ids": json.loads(item.source_ids_json), "enabled": item.enabled, "last_run_at": item.last_run_at, "created_at": item.created_at})
+    return ScheduleRead.model_validate(
+        {
+            "id": item.id,
+            "name": item.name,
+            "frequency": item.frequency,
+            "hour": item.hour,
+            "weekday": item.weekday,
+            "monthday": item.monthday,
+            "start_date": item.start_date,
+            "source_ids": json.loads(item.source_ids_json),
+            "keyword_filter_enabled": bool(item.keyword_filter_enabled),
+            "auto_structure_enabled": bool(item.auto_structure_enabled),
+            "enabled": item.enabled,
+            "last_run_at": item.last_run_at,
+            "created_at": item.created_at,
+        }
+    )
+
+
+def _scheduled_task_payload(item: ScheduledTask) -> TaskCreate:
+    """Build a run using the schedule options and the latest saved keywords."""
+    return TaskCreate(
+        source_ids=json.loads(item.source_ids_json),
+        start_date=item.start_date,
+        keyword_filter_enabled=bool(item.keyword_filter_enabled),
+        auto_structure_enabled=bool(item.auto_structure_enabled),
+    )
 
 
 @app.get("/api/schedules", response_model=list[ScheduleRead])
@@ -385,7 +411,7 @@ def _schedule_loop() -> None:
                     if due and (not item.last_run_at or item.last_run_at.date() != now.date()):
                         sources = db.scalars(select(Source).where(Source.id.in_(json.loads(item.source_ids_json)), Source.enabled.is_(True))).all()
                         if len(sources) == len(json.loads(item.source_ids_json)):
-                            task_payload = TaskCreate(source_ids=json.loads(item.source_ids_json), start_date=item.start_date)
+                            task_payload = _scheduled_task_payload(item)
                             created = create_task(task_payload, BackgroundTasks(), db)
                             item.last_run_at = utc_now(); db.commit()
                             _run_task_background(created.id)

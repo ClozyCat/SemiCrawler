@@ -2268,11 +2268,19 @@ function shortMoment(value) {
   return sameYear ? `${d.getMonth() + 1}月${d.getDate()}日 ${hhmm}` : `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日`
 }
 
+const EMPTY_SCHEDULE_FORM = { name: '', frequency: 'daily', hour: 9, weekday: 1, monthday: 1, start_date: DEFAULT_DATE, source_ids: [], keyword_filter_enabled: true, auto_structure_enabled: true, enabled: true }
+
 function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
-  const [form, setForm] = useState({ name: '', frequency: 'daily', hour: 9, weekday: 1, monthday: 1, start_date: DEFAULT_DATE, source_ids: [], enabled: true })
+  const [form, setForm] = useState({ ...EMPTY_SCHEDULE_FORM })
+  const [open, setOpen] = useState(false)
   const [saving, setSaving] = useState(false)
 
   const enabledSources = sources.filter((source) => source.enabled)
+
+  const openBuilder = () => {
+    setForm({ ...EMPTY_SCHEDULE_FORM })
+    setOpen(true)
+  }
 
   const submit = async (event) => {
     event.preventDefault()
@@ -2280,7 +2288,7 @@ function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
     setSaving(true)
     try {
       await onCreate({ ...form, name: form.name.trim() || `${scheduleText(form)} 采集` })
-      setForm({ ...form, name: '', source_ids: [] })
+      setOpen(false)
     } finally {
       setSaving(false)
     }
@@ -2292,6 +2300,10 @@ function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
       : [...old.source_ids, id]
   }))
   const setHour = (event) => setForm({ ...form, hour: Number(event.target.value) })
+  const toggleAllSources = (select) => setForm((old) => ({
+    ...old,
+    source_ids: select ? enabledSources.map((source) => source.id) : [],
+  }))
 
   return (
     <>
@@ -2300,100 +2312,18 @@ function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
       </div>
 
       <div className="schedules-layout">
-        <section className="panel schedule-builder">
-          <div className="panel-head">
-            <div>
-              <h2><span className="head-badge"><CalendarClock /></span>创建定时任务</h2>
-              <p>设定执行节奏与覆盖范围，保存后立即生效</p>
-            </div>
-          </div>
-          <form className="schedule-form" onSubmit={submit}>
-            <div className="form-block">
-              <div className="block-label"><span className="step-no">01</span>基础设置</div>
-              <div className="block-fields">
-                <label className="field">
-                  <span>任务名称</span>
-                  <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：每日产业动态采集" />
-                  <small className="field-aside">留空将按执行计划自动命名</small>
-                </label>
-                <label className="field">
-                  <span>资讯起始日期</span>
-                  <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
-                </label>
-              </div>
-            </div>
-            <div className="form-block">
-              <div className="block-label"><span className="step-no">02</span>执行计划</div>
-              <div className="freq-seg" role="radiogroup" aria-label="执行频率">
-                {SCHEDULE_FREQUENCIES.map(({ value, label, icon: Icon }) => (
-                  <button type="button" key={value} className={form.frequency === value ? 'active' : ''} onClick={() => setForm({ ...form, frequency: value })}>
-                    <Icon />{label}
-                  </button>
-                ))}
-              </div>
-              <div className={`freq-opts${form.frequency === 'daily' ? ' single' : ''}`}>
-                {form.frequency !== 'daily' && (
-                  <label className="field">
-                    <span>{form.frequency === 'weekly' ? '星期' : '日期'}</span>
-                    {form.frequency === 'weekly' ? (
-                      <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>
-                        {WEEKDAY_LETTERS.map((letter, index) => <option key={letter} value={index}>星期{letter}</option>)}
-                      </select>
-                    ) : (
-                      <select value={form.monthday} onChange={(e) => setForm({ ...form, monthday: Number(e.target.value) })}>
-                        {Array.from({ length: 31 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 日</option>)}
-                      </select>
-                    )}
-                  </label>
-                )}
-                <label className="field">
-                  <span>执行时间</span>
-                  <select value={form.hour} onChange={setHour}>
-                    {Array.from({ length: 24 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}:00</option>)}
-                  </select>
-                </label>
-              </div>
-              <div className="schedule-preview"><CalendarClock /><p>执行计划 <b>{scheduleText(form)}</b> · 自 <b>{form.start_date}</b> 起回溯</p></div>
-            </div>
-            <div className="form-block">
-              <div className="block-label"><span className="step-no">03</span>覆盖信息源 <em className="block-count">{form.source_ids.length} 已选</em></div>
-              <div className="source-picker">
-                {enabledSources.map((source) => {
-                  const isSearch = source.source_type === 'web_search'
-                  const checked = form.source_ids.includes(source.id)
-                  return (
-                    <label className={`source-option${checked ? ' checked' : ''}`} key={source.id}>
-                      <input type="checkbox" checked={checked} onChange={() => toggleSource(source.id)} />
-                      <span className="pick-mark">{checked && <Check />}</span>
-                      <span className="option-copy">
-                        <b title={source.name}>{source.name}</b>
-                        <small>{source.config?.query ? `联网检索 · ${source.config.query}` : source.builtin ? '内置站点 · 官方维护' : '自定义采集 · 自维护选择器'}</small>
-                      </span>
-                      <span className={`pick-tag ${isSearch ? 'search' : source.builtin ? 'builtin' : 'custom'}`}>{isSearch ? <Globe2 /> : <Rss />}{isSearch ? '联网' : '爬虫'}</span>
-                    </label>
-                  )
-                })}
-                {!enabledSources.length && (
-                  <div className="picker-empty"><Rss /><span>暂无启用的信息源，请先在「信息源管理」中添加并启用。</span></div>
-                )}
-              </div>
-              <p className="block-foot-note"><ShieldCheck /> 规则存在期间，覆盖的信息源将受到删除保护；仅列出已启用的信息源。</p>
-              <button className="primary schedule-submit" disabled={saving || !form.source_ids.length}>
-                {saving ? <LoaderCircle className="spin" /> : <Clock />}{saving ? '正在创建...' : '创建定时任务'}
-              </button>
-            </div>
-          </form>
-        </section>
-
         <section className="panel schedule-registry">
           <div className="panel-head">
             <div>
               <h2>已创建的定时任务</h2>
               <p>共 {schedules.length} 条调度规则 · 每次执行自动采用最新关键词与 API 配置</p>
             </div>
+            <button type="button" className="primary" onClick={openBuilder} disabled={!enabledSources.length} title={!enabledSources.length ? '请先在「信息源管理」中添加并启用信息源' : undefined}>
+              <Plus />新建定时任务
+            </button>
           </div>
           {!schedules.length ? (
-            <div className="blank compact"><Clock /><b>尚未创建定时任务</b><span>在左侧设置执行频率与覆盖信息源后，调度器将按时自动启动采集。</span></div>
+            <div className="blank compact"><Clock /><b>尚未创建定时任务</b><span>点击右上角「新建定时任务」，设置执行频率与覆盖信息源后，调度器将按时自动启动采集。</span></div>
           ) : (
             <div className="schedule-cards">
               {schedules.map((item) => {
@@ -2409,6 +2339,8 @@ function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
                       <span className={`sched-state ${item.enabled ? 'on' : 'off'}`}>{item.enabled ? '启用中' : '已暂停'}</span>
                     </div>
                     <div className="sched-chips">
+                      {item.keyword_filter_enabled && <span className="src-chip strategy"><Filter />三维过滤</span>}
+                      {item.auto_structure_enabled && <span className="src-chip strategy ai"><Sparkles />AI 结构化</span>}
                       {item.source_ids.map((id, index) => {
                         if (index >= 2 && item.source_ids.length > 3) return null
                         if (index === 2 && item.source_ids.length > 3) {
@@ -2443,6 +2375,119 @@ function SchedulesView({ schedules, sources, onCreate, onUpdate, onDelete }) {
           )}
         </section>
       </div>
+
+      {open && (
+        <Modal title="创建定时任务" onClose={() => setOpen(false)}>
+          <form className="modal-form" onSubmit={submit}>
+            <div className="modal-body">
+              <div className="builder-group">
+                <div className="block-label"><span className="step-no">01</span>基础设置</div>
+                <div className="builder-name-date">
+                  <label className="field">
+                    <span>任务名称</span>
+                    <input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="例如：每日产业动态采集" />
+                    <small className="field-aside">留空将按执行计划自动命名</small>
+                  </label>
+                  <label className="field">
+                    <span>资讯起始日期</span>
+                    <input type="date" value={form.start_date} onChange={(e) => setForm({ ...form, start_date: e.target.value })} />
+                  </label>
+                </div>
+              </div>
+
+              <div className="builder-group">
+                <div className="block-label"><span className="step-no">02</span>执行计划</div>
+                <div className="freq-seg" role="radiogroup" aria-label="执行频率">
+                  {SCHEDULE_FREQUENCIES.map(({ value, label, icon: Icon }) => (
+                    <button type="button" key={value} className={form.frequency === value ? 'active' : ''} onClick={() => setForm({ ...form, frequency: value })}>
+                      <Icon />{label}
+                    </button>
+                  ))}
+                </div>
+                <div className="builder-plan-opts">
+                  {form.frequency !== 'daily' && (
+                    <label className="field">
+                      <span>{form.frequency === 'weekly' ? '执行星期' : '执行日期'}</span>
+                      {form.frequency === 'weekly' ? (
+                        <select value={form.weekday} onChange={(e) => setForm({ ...form, weekday: Number(e.target.value) })}>
+                          {WEEKDAY_LETTERS.map((letter, index) => <option key={letter} value={index}>星期{letter}</option>)}
+                        </select>
+                      ) : (
+                        <select value={form.monthday} onChange={(e) => setForm({ ...form, monthday: Number(e.target.value) })}>
+                          {Array.from({ length: 31 }, (_, index) => <option key={index + 1} value={index + 1}>{index + 1} 日</option>)}
+                        </select>
+                      )}
+                    </label>
+                  )}
+                  <label className="field">
+                    <span>执行时间</span>
+                    <select value={form.hour} onChange={setHour}>
+                      {Array.from({ length: 24 }, (_, index) => <option key={index} value={index}>{String(index).padStart(2, '0')}:00</option>)}
+                    </select>
+                  </label>
+                </div>
+              </div>
+
+              <div className="builder-group">
+                <div className="block-label"><span className="step-no">03</span>智能处理</div>
+                <div className="run-toggles">
+                  <label className="toggle-card">
+                    <input type="checkbox" checked={form.keyword_filter_enabled} onChange={(e) => setForm({ ...form, keyword_filter_enabled: e.target.checked })} />
+                    <div className="toggle-card-copy">
+                      <b>三维关键词过滤</b>
+                    </div>
+                  </label>
+                  <label className="toggle-card">
+                    <input type="checkbox" checked={form.auto_structure_enabled} onChange={(e) => setForm({ ...form, auto_structure_enabled: e.target.checked })} />
+                    <div className="toggle-card-copy">
+                      <b>AI 自动结构化</b>
+                    </div>
+                  </label>
+                </div>
+              </div>
+
+              <div className="builder-sources">
+                <div className="builder-sources-head">
+                  <div className="block-label"><span className="step-no">04</span>覆盖信息源</div>
+                  <div className="builder-sources-meta">
+                    <em className="block-count">{form.source_ids.length} / {enabledSources.length} 已选</em>
+                    <button type="button" className="text-btn quiet" onClick={() => toggleAllSources(true)} disabled={!enabledSources.length}>全选</button>
+                    <button type="button" className="text-btn quiet" onClick={() => toggleAllSources(false)} disabled={!form.source_ids.length}>清空</button>
+                  </div>
+                </div>
+                <div className="source-pills">
+                  {enabledSources.map((source) => {
+                    const isSearch = source.source_type === 'web_search'
+                    const checked = form.source_ids.includes(source.id)
+                    return (
+                      <label
+                        key={source.id}
+                        className={`source-pill${checked ? ' checked' : ''} pill-${isSearch ? 'search' : source.builtin ? 'builtin' : 'custom'}`}
+                        title={source.name}
+                      >
+                        <input type="checkbox" checked={checked} onChange={() => toggleSource(source.id)} />
+                        <span className="pill-mark" aria-hidden>{checked && <Check />}</span>
+                        <span className="pill-kind" aria-hidden>{isSearch ? <Globe2 /> : <Rss />}</span>
+                        <b>{source.name}</b>
+                        <small>{isSearch ? searchProviderLabel(sourceSearchProvider(source)) : source.builtin ? '内置站点' : '自定义采集'}</small>
+                      </label>
+                    )
+                  })}
+                  {!enabledSources.length && (
+                    <div className="picker-empty"><Rss /><span>暂无启用的信息源，请先在「信息源管理」中添加并启用。</span></div>
+                  )}
+                </div>
+              </div>
+            </div>
+            <div className="modal-foot">
+              <button type="button" className="secondary" onClick={() => setOpen(false)} disabled={saving}>取消</button>
+              <button type="submit" className="primary schedule-submit" disabled={saving || !form.source_ids.length}>
+                {saving ? <LoaderCircle className="spin" /> : <Clock />}{saving ? '正在创建...' : '创建定时任务'}
+              </button>
+            </div>
+          </form>
+        </Modal>
+      )}
     </>
   )
 }

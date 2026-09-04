@@ -58,6 +58,10 @@ def migrate_legacy_database() -> None:
             "auto_structure_enabled": "BOOLEAN DEFAULT 0",
             "keyword_config_json": "TEXT DEFAULT '[]'",
         },
+        "scheduled_tasks": {
+            "keyword_filter_enabled": "BOOLEAN DEFAULT 0",
+            "auto_structure_enabled": "BOOLEAN DEFAULT 0",
+        },
     }
     with engine.begin() as connection:
         inspector = inspect(connection)

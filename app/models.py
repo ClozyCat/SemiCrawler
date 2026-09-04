@@ -95,6 +95,8 @@ class ScheduledTask(Base):
     monthday: Mapped[int | None] = mapped_column(Integer)
     start_date: Mapped[date] = mapped_column(Date)
     source_ids_json: Mapped[str] = mapped_column(Text)
+    keyword_filter_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
+    auto_structure_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     enabled: Mapped[bool] = mapped_column(Boolean, default=True)
     last_run_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now)

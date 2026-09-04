@@ -111,6 +111,8 @@ class ScheduleCreate(BaseModel):
     monthday: int | None = Field(default=None, ge=1, le=31)
     start_date: date = date.fromisoformat(DEFAULT_START_DATE)
     source_ids: list[int] = Field(min_length=1)
+    keyword_filter_enabled: bool = False
+    auto_structure_enabled: bool = False
     enabled: bool = True
 
     @field_validator("source_ids")

@@ -1214,18 +1214,200 @@ a.external:hover {
 
 .schedules-layout {
   display: grid;
-  grid-template-columns: minmax(350px, 420px) minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr);
   gap: 20px;
   align-items: start;
 }
 
-.schedule-builder {
-  position: sticky;
-  top: calc(var(--topbar-h) + 24px);
-  max-height: calc(100vh - var(--topbar-h) - 48px);
+.builder-group {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-width: 0;
+}
+
+/* Each step of the create dialog is a stacked section with a dashed divider */
+.builder-group + .builder-group {
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-card);
+}
+
+.modal-body > .builder-group + .builder-group,
+.modal-body > .builder-sources {
+  margin-top: 4px;
+}
+
+.builder-name-date {
+  display: grid;
+  grid-template-columns: minmax(0, 1.6fr) minmax(150px, 0.6fr);
+  gap: 12px;
+  max-width: 620px;
+}
+
+.builder-plan-opts {
+  display: flex;
+  gap: 12px;
+}
+
+.builder-plan-opts .field {
+  flex: 1 1 150px;
+}
+
+.builder-sources {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--border-card);
+}
+
+.builder-sources-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.builder-sources-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.builder-sources-meta .text-btn {
+  min-height: 28px;
+  padding: 0 8px;
+  background: transparent;
+}
+
+/* Pills ------------------------------------------------------------------- */
+
+.source-pills {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  max-height: 162px;
   overflow-y: auto;
-  overscroll-behavior: contain;
-  scrollbar-width: thin;
+  padding: 2px 2px 6px;
+}
+
+.source-pill {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  max-width: 100%;
+  padding: 5px 12px 5px 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-card);
+  background: var(--bg-muted);
+  cursor: pointer;
+  transition: border-color var(--t-fast), background-color var(--t-fast),
+    box-shadow var(--t-fast);
+}
+
+.source-pill:hover {
+  border-color: var(--slate-400);
+  background: #ffffff;
+}
+
+.source-pill input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.pill-mark {
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  border: 1.5px solid var(--slate-300);
+  background: #ffffff;
+  color: transparent;
+  transition: background-color var(--t-fast), border-color var(--t-fast),
+    color var(--t-fast);
+}
+
+.pill-mark svg {
+  width: 11px;
+  height: 11px;
+  stroke-width: 3.4;
+}
+
+.pill-kind {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.pill-kind svg {
+  width: 13px;
+  height: 13px;
+}
+
+.source-pill b {
+  min-width: 0;
+  max-width: 220px;
+  color: var(--ink-strong);
+  font-size: 12.5px;
+  font-weight: 600;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.source-pill small {
+  padding: 1px 7px;
+  border-radius: var(--radius-full);
+  background: var(--slate-100);
+  color: var(--ink-faint);
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.source-pill.checked {
+  border-color: var(--brand-300);
+  background: var(--brand-50);
+  box-shadow: inset 0 0 0 1px rgba(58, 111, 240, 0.12);
+}
+
+.source-pill.checked .pill-mark {
+  background: var(--brand-600);
+  border-color: var(--brand-600);
+  color: #ffffff;
+}
+
+/* Type tinting mirrors the source-kind chips used elsewhere in the app */
+.pill-search .pill-kind { color: var(--teal-600); }
+.pill-search small { background: var(--teal-50); color: var(--teal-700); }
+.pill-search.checked {
+  border-color: var(--teal-300);
+  background: var(--teal-50);
+  box-shadow: inset 0 0 0 1px rgba(13, 148, 136, 0.12);
+}
+.pill-search.checked .pill-mark {
+  background: var(--teal-600);
+  border-color: var(--teal-600);
+}
+
+.pill-builtin .pill-kind { color: var(--brand-600); }
+.pill-builtin small { background: var(--brand-50); color: var(--brand-700); }
+
+.pill-custom .pill-kind { color: var(--violet-600); }
+.pill-custom small { background: var(--violet-50); color: var(--violet-700); }
+.pill-custom.checked {
+  border-color: var(--violet-300);
+  background: var(--violet-50);
+  box-shadow: inset 0 0 0 1px rgba(124, 58, 237, 0.12);
+}
+.pill-custom.checked .pill-mark {
+  background: var(--violet-600);
+  border-color: var(--violet-600);
 }
 
 .head-badge {
@@ -1243,24 +1425,6 @@ a.external:hover {
 .head-badge svg {
   width: 16px;
   height: 16px;
-}
-
-.schedule-form {
-  display: flex;
-  flex-direction: column;
-  gap: 18px;
-  padding: 18px 20px 20px;
-}
-
-.form-block {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-
-.form-block + .form-block {
-  padding-top: 16px;
-  border-top: 1px dashed var(--border-card);
 }
 
 .block-label {
@@ -1289,7 +1453,6 @@ a.external:hover {
 }
 
 .block-count {
-  margin-left: auto;
   padding: 1px 8px;
   border-radius: var(--radius-full);
   background: var(--brand-50);
@@ -1298,12 +1461,6 @@ a.external:hover {
   font-size: 10.5px;
   font-style: normal;
   font-weight: 600;
-}
-
-.block-fields {
-  display: grid;
-  grid-template-columns: minmax(0, 1.5fr) minmax(132px, 0.9fr);
-  gap: 12px;
 }
 
 .field-aside {
@@ -1355,163 +1512,6 @@ a.external:hover {
   color: var(--brand-600);
 }
 
-.freq-opts {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.freq-opts.single {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.schedule-preview {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  padding: 10px 13px;
-  border-radius: var(--radius-md);
-  background: linear-gradient(135deg, var(--brand-50), #f2f6ff);
-  border: 1px solid var(--brand-200);
-  color: var(--brand-800);
-}
-
-.schedule-preview svg {
-  width: 15px;
-  height: 15px;
-  flex-shrink: 0;
-  color: var(--brand-600);
-}
-
-.schedule-preview p {
-  margin: 0;
-  font-size: 12px;
-  line-height: 1.55;
-}
-
-.schedule-preview b {
-  color: var(--brand-700);
-  font-weight: 700;
-  font-variant-numeric: tabular-nums;
-}
-
-.source-picker {
-  display: grid;
-  gap: 8px;
-  max-height: 244px;
-  overflow-y: auto;
-  padding-right: 2px;
-}
-
-.source-option {
-  position: relative;
-  display: grid;
-  grid-template-columns: 20px minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 10px;
-  padding: 9px 12px;
-  border-radius: var(--radius-md);
-  border: 1px solid var(--border-card);
-  background: var(--bg-muted);
-  cursor: pointer;
-  transition: border-color var(--t-fast), background-color var(--t-fast), box-shadow var(--t-fast);
-}
-
-.source-option:hover {
-  border-color: var(--brand-300);
-  background: #ffffff;
-}
-
-.source-option.checked {
-  border-color: var(--brand-300);
-  background: linear-gradient(90deg, rgba(58, 111, 240, 0.05), rgba(58, 111, 240, 0.015));
-  box-shadow: inset 0 0 0 1px rgba(58, 111, 240, 0.1);
-}
-
-.source-option input {
-  position: absolute;
-  opacity: 0;
-  pointer-events: none;
-}
-
-.pick-mark {
-  display: grid;
-  place-items: center;
-  width: 20px;
-  height: 20px;
-  border-radius: 6px;
-  border: 1.5px solid var(--slate-300);
-  background: #ffffff;
-  color: transparent;
-  transition: background-color var(--t-fast), border-color var(--t-fast), color var(--t-fast);
-}
-
-.pick-mark svg {
-  width: 13px;
-  height: 13px;
-  stroke-width: 3;
-}
-
-.source-option.checked .pick-mark {
-  background: var(--brand-600);
-  border-color: var(--brand-600);
-  color: #ffffff;
-}
-
-.option-copy {
-  display: flex;
-  flex-direction: column;
-  min-width: 0;
-}
-
-.option-copy b {
-  color: var(--ink-strong);
-  font-size: 12.5px;
-  font-weight: 600;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.option-copy small {
-  margin-top: 1px;
-  color: var(--ink-faint);
-  font-size: 10.5px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.pick-tag {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  padding: 2px 8px;
-  border-radius: var(--radius-full);
-  background: var(--slate-100);
-  border: 1px solid var(--border-card);
-  color: var(--slate-500);
-  font-size: 10.5px;
-  font-weight: 600;
-}
-
-.pick-tag svg {
-  width: 11px;
-  height: 11px;
-}
-
-.pick-tag.search {
-  background: var(--teal-50);
-  border-color: var(--teal-200);
-  color: var(--teal-700);
-}
-
-.pick-tag.custom {
-  background: var(--violet-50);
-  border-color: var(--violet-200);
-  color: var(--violet-700);
-}
-
 .picker-empty {
   display: flex;
   align-items: center;
@@ -1530,26 +1530,10 @@ a.external:hover {
   flex-shrink: 0;
 }
 
-.block-foot-note {
-  display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  margin: 0;
-  color: var(--ink-faint);
-  font-size: 11px;
-  line-height: 1.5;
-}
-
-.block-foot-note svg {
-  width: 13px;
-  height: 13px;
-  flex-shrink: 0;
-  margin-top: 1px;
-}
-
 .schedule-submit {
-  width: 100%;
-  min-height: 41px;
+  min-width: 220px;
+  min-height: 40px;
+  flex-shrink: 0;
 }
 
 /* Registry */
@@ -1742,6 +1726,18 @@ a.external:hover {
 
 .src-chip.search svg {
   color: var(--teal-600);
+}
+
+.src-chip.strategy {
+  background: var(--brand-50);
+  border-color: var(--brand-200);
+  color: var(--brand-700);
+}
+
+.src-chip.strategy.ai {
+  background: var(--violet-50);
+  border-color: var(--violet-200);
+  color: var(--violet-700);
 }
 
 .schedule-card-foot {
@@ -1945,6 +1941,17 @@ a.external:hover {
   font-weight: 600;
   color: var(--ink-strong);
   line-height: 1.35;
+}
+
+/* Inside the create-task dialog the toggles are compact single-line chips */
+.modal .toggle-card {
+  align-items: center;
+  padding: 8px 12px;
+}
+
+.modal .toggle-card-copy b {
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .toggle-card-copy small {
@@ -4452,11 +4459,6 @@ main > *:nth-child(n + 5) { animation-delay: 150ms; }
   .analytics-graph { min-height: 520px; }
   .detail-layout { grid-template-columns: minmax(0, 1fr); }
   .detail-aside { position: static; }
-  .schedules-layout { grid-template-columns: minmax(0, 1fr); }
-  .schedule-builder {
-    position: static;
-    max-height: none;
-  }
 }
 
 @media (max-width: 900px) {
@@ -4499,6 +4501,9 @@ main > *:nth-child(n + 5) { animation-delay: 150ms; }
   .log-entry { grid-template-columns: minmax(0, 1fr); gap: 4px; }
   .modal-backdrop { padding: 12px; }
   .toast { right: 12px; bottom: 12px; }
+  .builder-name-date { grid-template-columns: minmax(0, 1fr); }
+  .builder-plan-opts { flex-direction: column; }
+  .schedule-submit { width: 100%; }
 }
 
 @media (prefers-reduced-motion: reduce) {
